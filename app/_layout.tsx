@@ -1,20 +1,26 @@
 import React, { useEffect } from 'react';
 import { Platform } from 'react-native';
-import { Redirect, Stack } from 'expo-router';
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useFonts, Inter_400Regular, Inter_500Medium, Inter_700Bold } from '@expo-google-fonts/inter';
-import { useFrameworkReady } from '@/hooks/useFrameworkReady';
-import { useAuthStore } from '@/stores/authStore';
-import { SplashScreen } from 'expo-splash-screen';
+import { 
+  useFonts, 
+  Inter_400Regular, 
+  Inter_500Medium, 
+  Inter_600SemiBold,
+  Inter_700Bold 
+} from '@expo-google-fonts/inter';
+import * as SplashScreen from 'expo-splash-screen';
 
 // Prevent splash screen from auto-hiding
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-  useFrameworkReady();
-  const { isAuthenticated, isInitialized } = useAuthStore();
-  
   const [fontsLoaded, fontError] = useFonts({
+    'Inter_400Regular': Inter_400Regular,
+    'Inter_500Medium': Inter_500Medium,
+    'Inter_600SemiBold': Inter_600SemiBold,
+    'Inter_700Bold': Inter_700Bold,
+    // Legacy names for compatibility
     'Inter-Regular': Inter_400Regular,
     'Inter-Medium': Inter_500Medium,
     'Inter-Bold': Inter_700Bold,
@@ -30,12 +36,7 @@ export default function RootLayout() {
   if (!fontsLoaded && !fontError) {
     return null;
   }
-  
-  // Check if app is initialized
-  if (!isInitialized) {
-    return <Redirect href="/setup" />;
-  }
-  
+
   return (
     <>
       <Stack screenOptions={{ 
@@ -43,11 +44,10 @@ export default function RootLayout() {
         animation: 'fade',
         contentStyle: { backgroundColor: '#000' }
       }}>
-        {!isAuthenticated ? (
-          <Stack.Screen name="(auth)\" options={{ gestureEnabled: false }} />
-        ) : (
-          <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
-        )}
+        <Stack.Screen name="setup" />
+        <Stack.Screen name="pin-setup" />
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(tabs)" />
       </Stack>
       <StatusBar style="light" />
     </>

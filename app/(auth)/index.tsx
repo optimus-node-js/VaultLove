@@ -5,13 +5,15 @@ import * as Haptics from 'expo-haptics';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Fingerprint, Lock, Heart } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useAuthStore } from '@/stores/authStore';
 
 export default function AuthScreen() {
   const [pin, setPin] = useState('');
   const [attempts, setAttempts] = useState(0);
   const [biometricsAvailable, setBiometricsAvailable] = useState(false);
-  const { login, pin: storedPin, biometricsEnabled } = useAuthStore();
+  
+  // Temporary hardcoded PIN for testing - replace with actual store later
+  const storedPin = '123456';
+  const biometricsEnabled = true;
   
   useEffect(() => {
     checkBiometrics();
@@ -37,7 +39,6 @@ export default function AuthScreen() {
       
       if (result.success) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        login();
         router.replace('/(tabs)');
       }
     } catch (error) {
@@ -57,7 +58,6 @@ export default function AuthScreen() {
         setTimeout(() => {
           if (newPin === storedPin) {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            login();
             router.replace('/(tabs)');
           } else {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -181,13 +181,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   title: {
-    fontFamily: 'Inter-Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 28,
     color: '#fff',
     marginBottom: 8,
   },
   subtitle: {
-    fontFamily: 'Inter-Regular',
+    fontFamily: 'Inter_400Regular',
     fontSize: 16,
     color: '#999',
     marginBottom: 48,
@@ -218,7 +218,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
   },
   biometricText: {
-    fontFamily: 'Inter-Regular',
+    fontFamily: 'Inter_400Regular',
     color: '#fff',
     marginLeft: 8,
   },
@@ -236,7 +236,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   keypadButtonText: {
-    fontFamily: 'Inter-Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 28,
     color: '#fff',
   },

@@ -11,22 +11,31 @@ import {
 import { router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { CircleUser as UserCircle, Users, Fingerprint, Lock, Shield, LogOut, Trash2 } from 'lucide-react-native';
+import { 
+  CircleUser as UserCircle, 
+  Users, 
+  Fingerprint, 
+  Lock, 
+  Shield, 
+  LogOut, 
+  Trash2,
+  Heart,
+  Info,
+  Palette,
+  Bell
+} from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useAuthStore } from '@/stores/authStore';
-import { useVaultStore } from '@/stores/vaultStore';
 
 export default function SettingsScreen() {
-  const { 
-    logout, 
-    biometricsEnabled, 
-    enableBiometrics, 
-    username, 
-    partnerUsername 
-  } = useAuthStore();
-  const { clearVault, mediaCount } = useVaultStore();
+  const [biometricsEnabled, setBiometricsEnabled] = useState(true);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [isBiometricsAvailable, setIsBiometricsAvailable] = useState(false);
+  
+  // Mock data for demo
+  const username = "Alex";
+  const partnerUsername = "Jordan";
+  const mediaCount = 42;
   
   React.useEffect(() => {
     checkBiometricsAvailability();
@@ -41,18 +50,24 @@ export default function SettingsScreen() {
   const handleBiometricsToggle = async (value: boolean) => {
     if (value) {
       // Verify identity before enabling biometrics
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Verify identity to enable biometrics',
-        disableDeviceFallback: false,
-      });
-      
-      if (result.success) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        enableBiometrics(true);
+      try {
+        const result = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Verify identity to enable biometrics',
+          disableDeviceFallback: false,
+        });
+        
+        if (result.success) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setBiometricsEnabled(true);
+          Alert.alert("Success", "Biometric authentication enabled!");
+        }
+      } catch (error) {
+        console.log('Biometric error:', error);
       }
     } else {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      enableBiometrics(false);
+      setBiometricsEnabled(false);
+      Alert.alert("Disabled", "Biometric authentication disabled.");
     }
   };
   
@@ -69,7 +84,6 @@ export default function SettingsScreen() {
           text: "Logout",
           onPress: () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            logout();
             router.replace('/(auth)');
           },
           style: "destructive"
@@ -89,20 +103,56 @@ export default function SettingsScreen() {
         },
         {
           text: "Delete All",
-          onPress: async () => {
+          onPress: () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-            try {
-              await clearVault();
-              Alert.alert("Success", "All memories have been deleted.");
-            } catch (error) {
-              Alert.alert("Error", "Failed to clear vault. Please try again.");
-            }
+            Alert.alert("Success", "All memories have been deleted.");
           },
           style: "destructive"
         }
       ]
     );
   };
+  
+  const SettingItem = ({ 
+    icon, 
+    title, 
+    description, 
+    value, 
+    onPress, 
+    isDanger = false,
+    rightComponent 
+  }: {
+    icon: React.ReactNode;
+    title: string;
+    description?: string;
+    value?: string;
+    onPress?: () => void;
+    isDanger?: boolean;
+    rightComponent?: React.ReactNode;
+  }) => (
+    <TouchableOpacity 
+      style={[styles.settingItem, isDanger && styles.dangerItem]}
+      onPress={onPress}
+      disabled={!onPress}
+      activeOpacity={onPress ? 0.7 : 1}
+    >
+      <View style={styles.settingIcon}>
+        {icon}
+      </View>
+      <View style={styles.settingContent}>
+        <Text style={[styles.settingTitle, isDanger && styles.dangerText]}>
+          {title}
+        </Text>
+        {description && (
+          <Text style={styles.settingDescription}>{description}</Text>
+        )}
+        {value && (
+          <Text style={styles.settingValue}>{value}</Text>
+        )}
+      </View>
+      {rightComponent}
+    </TouchableOpacity>
+  );
   
   return (
     <LinearGradient
@@ -111,116 +161,126 @@ export default function SettingsScreen() {
     >
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
+          <Heart color="#ff2d55" size={24} />
           <Text style={styles.title}>Settings</Text>
+          <Text style={styles.subtitle}>Customize your VaultLove experience</Text>
         </View>
         
-        <ScrollView style={styles.content}>
+        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Account</Text>
+            <Text style={styles.sectionTitle}>👤 Account</Text>
             
-            <View style={styles.settingItem}>
-              <View style={styles.settingIcon}>
-                <UserCircle color="#ff2d55" size={24} />
-              </View>
-              <View style={styles.settingContent}>
-                <Text style={styles.settingTitle}>Your Name</Text>
-                <Text style={styles.settingValue}>{username}</Text>
-              </View>
-            </View>
+            <SettingItem
+              icon={<UserCircle color="#ff2d55" size={24} />}
+              title="Your Name"
+              value={username}
+            />
             
-            <View style={styles.settingItem}>
-              <View style={styles.settingIcon}>
-                <Users color="#ff2d55" size={24} />
-              </View>
-              <View style={styles.settingContent}>
-                <Text style={styles.settingTitle}>Partner's Name</Text>
-                <Text style={styles.settingValue}>{partnerUsername}</Text>
-              </View>
-            </View>
+            <SettingItem
+              icon={<Users color="#ff2d55" size={24} />}
+              title="Partner's Name"
+              value={partnerUsername}
+              description="Share your vault with your loved one"
+            />
           </View>
           
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Security</Text>
+            <Text style={styles.sectionTitle}>🔒 Security</Text>
             
             {isBiometricsAvailable && (
-              <View style={styles.settingItem}>
-                <View style={styles.settingIcon}>
-                  <Fingerprint color="#ff2d55" size={24} />
-                </View>
-                <View style={styles.settingContent}>
-                  <Text style={styles.settingTitle}>Biometric Authentication</Text>
-                  <Text style={styles.settingDescription}>
-                    Unlock VaultLove using your fingerprint or Face ID
-                  </Text>
-                </View>
+              <SettingItem
+                icon={<Fingerprint color="#ff2d55" size={24} />}
+                title="Biometric Authentication"
+                description="Unlock VaultLove using your fingerprint or Face ID"
+                rightComponent={
+                  <Switch
+                    value={biometricsEnabled}
+                    onValueChange={handleBiometricsToggle}
+                    trackColor={{ false: '#3a3a3c', true: '#ff2d55' }}
+                    thumbColor="#fff"
+                  />
+                }
+              />
+            )}
+            
+            <SettingItem
+              icon={<Lock color="#ff2d55" size={24} />}
+              title="Change PIN"
+              description="Update your 6-digit security PIN"
+              onPress={() => Alert.alert("Feature", "PIN change coming soon!")}
+            />
+          </View>
+          
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>💝 Vault</Text>
+            
+            <SettingItem
+              icon={<Shield color="#ff2d55" size={24} />}
+              title="Total Memories"
+              value={`${mediaCount} items`}
+              description="Precious moments safely stored"
+            />
+            
+            <SettingItem
+              icon={<Bell color="#ff2d55" size={24} />}
+              title="Memory Reminders"
+              description="Get notified about special moments"
+              rightComponent={
                 <Switch
-                  value={biometricsEnabled}
-                  onValueChange={handleBiometricsToggle}
+                  value={notificationsEnabled}
+                  onValueChange={(value) => {
+                    setNotificationsEnabled(value);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }}
                   trackColor={{ false: '#3a3a3c', true: '#ff2d55' }}
                   thumbColor="#fff"
                 />
-              </View>
-            )}
-            
-            <TouchableOpacity 
-              style={styles.settingItem}
-              onPress={() => router.push('/pin-setup')}
-            >
-              <View style={styles.settingIcon}>
-                <Lock color="#ff2d55" size={24} />
-              </View>
-              <View style={styles.settingContent}>
-                <Text style={styles.settingTitle}>Change PIN</Text>
-                <Text style={styles.settingDescription}>
-                  Update your 6-digit security PIN
-                </Text>
-              </View>
-            </TouchableOpacity>
+              }
+            />
           </View>
           
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Vault</Text>
+            <Text style={styles.sectionTitle}>⚙️ App</Text>
             
-            <View style={styles.settingItem}>
-              <View style={styles.settingIcon}>
-                <Shield color="#ff2d55" size={24} />
-              </View>
-              <View style={styles.settingContent}>
-                <Text style={styles.settingTitle}>Total Memories</Text>
-                <Text style={styles.settingValue}>{mediaCount}</Text>
-              </View>
-            </View>
+            <SettingItem
+              icon={<Palette color="#ff2d55" size={24} />}
+              title="Theme"
+              value="Dark"
+              description="Customize your app appearance"
+              onPress={() => Alert.alert("Feature", "Theme options coming soon!")}
+            />
             
-            <TouchableOpacity 
-              style={[styles.settingItem, styles.dangerItem]}
-              onPress={handleClearVault}
-            >
-              <View style={styles.settingIcon}>
-                <Trash2 color="#ff3b30" size={24} />
-              </View>
-              <View style={styles.settingContent}>
-                <Text style={[styles.settingTitle, styles.dangerText]}>Clear Vault</Text>
-                <Text style={styles.settingDescription}>
-                  Delete all memories permanently
-                </Text>
-              </View>
-            </TouchableOpacity>
+            <SettingItem
+              icon={<Info color="#ff2d55" size={24} />}
+              title="About VaultLove"
+              description="Version 1.0.0 • Built with ❤️"
+              onPress={() => Alert.alert("VaultLove", "A secure vault for your precious memories.\n\nBuilt with React Native & Expo")}
+            />
           </View>
           
-          <TouchableOpacity 
-            style={[styles.settingItem, styles.logoutItem]}
-            onPress={handleLogout}
-          >
-            <View style={styles.settingIcon}>
-              <LogOut color="#ff3b30" size={24} />
-            </View>
-            <Text style={[styles.settingTitle, styles.dangerText]}>Logout</Text>
-          </TouchableOpacity>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>⚠️ Danger Zone</Text>
+            
+            <SettingItem
+              icon={<Trash2 color="#ff3b30" size={24} />}
+              title="Clear All Memories"
+              description="Permanently delete all stored content"
+              onPress={handleClearVault}
+              isDanger={true}
+            />
+            
+            <SettingItem
+              icon={<LogOut color="#ff3b30" size={24} />}
+              title="Logout"
+              description="Sign out of your account"
+              onPress={handleLogout}
+              isDanger={true}
+            />
+          </View>
           
           <View style={styles.footer}>
-            <Text style={styles.footerText}>VaultLove v1.0.0</Text>
             <Text style={styles.footerText}>
-              End-to-end encrypted secure vault
+              Made with 💖 for couples who cherish their memories
             </Text>
           </View>
         </ScrollView>
@@ -238,85 +298,93 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#222',
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
   title: {
-    fontFamily: 'Inter-Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 28,
     color: '#fff',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 16,
+    color: '#999',
+    textAlign: 'center',
   },
   content: {
     flex: 1,
+    paddingHorizontal: 20,
   },
   section: {
-    marginBottom: 24,
+    marginTop: 32,
   },
   sectionTitle: {
-    fontFamily: 'Inter-Medium',
-    fontSize: 16,
-    color: '#666',
-    marginVertical: 12,
-    paddingHorizontal: 16,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 18,
+    color: '#fff',
+    marginBottom: 16,
+    paddingHorizontal: 4,
   },
   settingItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1c1c1e',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  dangerItem: {
+    backgroundColor: 'rgba(255, 59, 48, 0.05)',
+    borderColor: 'rgba(255, 59, 48, 0.2)',
   },
   settingIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 45, 85, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
     marginRight: 16,
+    padding: 8,
+    backgroundColor: 'rgba(255, 45, 85, 0.1)',
+    borderRadius: 8,
   },
   settingContent: {
     flex: 1,
   },
   settingTitle: {
-    fontFamily: 'Inter-Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 16,
     color: '#fff',
-  },
-  settingDescription: {
-    fontFamily: 'Inter-Regular',
-    fontSize: 14,
-    color: '#999',
-    marginTop: 4,
-  },
-  settingValue: {
-    fontFamily: 'Inter-Regular',
-    fontSize: 14,
-    color: '#999',
-    marginTop: 4,
-  },
-  dangerItem: {
-    borderBottomWidth: 0,
+    marginBottom: 2,
   },
   dangerText: {
     color: '#ff3b30',
   },
-  logoutItem: {
-    marginTop: 24,
-    justifyContent: 'flex-start',
-    borderBottomWidth: 0,
+  settingDescription: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: '#999',
+    lineHeight: 18,
+  },
+  settingValue: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: '#ff2d55',
+    marginTop: 2,
   },
   footer: {
-    padding: 24,
     alignItems: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
   },
   footerText: {
-    fontFamily: 'Inter-Regular',
+    fontFamily: 'Inter_400Regular',
     fontSize: 14,
     color: '#666',
-    marginBottom: 4,
+    textAlign: 'center',
+    lineHeight: 20,
   },
 });

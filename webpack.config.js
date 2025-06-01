@@ -1,0 +1,38 @@
+const createExpoWebpackConfigAsync = require('@expo/webpack-config');
+const path = require('path');
+const webpack = require('webpack');
+
+// Set the EXPO_ROUTER_APP_ROOT environment variable
+process.env.EXPO_ROUTER_APP_ROOT = './app';
+
+module.exports = async function (env, argv) {
+  const config = await createExpoWebpackConfigAsync(env, argv);
+  
+  // Add alias for "../../../../app" to resolve to ./app
+  if (!config.resolve) {
+    config.resolve = {};
+  }
+  
+  if (!config.resolve.alias) {
+    config.resolve.alias = {};
+  }
+  
+  // Add the app directory aliases
+  config.resolve.alias.app = path.resolve(__dirname, 'app');
+  config.resolve.alias['../../../../app'] = path.resolve(__dirname, 'app');
+  config.resolve.alias['@'] = path.resolve(__dirname);
+  config.resolve.alias['nanoid'] = path.resolve(__dirname, 'node_modules/nanoid');
+  
+  // Add DefinePlugin to hardcode the environment variable in the compiled JavaScript
+  if (!config.plugins) {
+    config.plugins = [];
+  }
+  
+  config.plugins.push(
+    new webpack.DefinePlugin({
+      'process.env.EXPO_ROUTER_APP_ROOT': JSON.stringify(path.resolve(__dirname, 'app'))
+    })
+  );
+  
+  return config;
+}; 
