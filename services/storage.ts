@@ -147,7 +147,7 @@ class StorageService {
           uploadedBy: currentUser.uid,
           uploadedAt: new Date().toISOString(),
           category: category,
-          caption: caption || ''
+          ...(caption && { caption }) // Only include caption if it has a value
         }
       });
 
@@ -172,7 +172,7 @@ class StorageService {
               const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
               console.log('🔗 Download URL obtained:', downloadURL);
 
-              // Create media record in Firestore
+              // Create media record in Firestore - exclude undefined fields
               const mediaData: Omit<MediaFile, 'id'> = {
                 fileName: uniqueFileName,
                 originalName: fileName,
@@ -183,7 +183,7 @@ class StorageService {
                 storagePath,
                 uploadedBy: currentUser.uid,
                 uploadedAt: serverTimestamp() as Timestamp,
-                caption,
+                ...(caption && { caption }), // Only include caption if it has a value
                 isFavorite: false,
                 isShared: false,
                 metadata: {

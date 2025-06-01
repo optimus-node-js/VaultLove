@@ -36,6 +36,8 @@ import {
   Grid3X3,
   Filter,
   X,
+  ZoomIn,
+  Upload as UploadIcon,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 
@@ -45,7 +47,7 @@ if (Platform.OS === 'ios') {
   ActionSheetIOS = require('react-native').ActionSheetIOS;
 }
 
-import storageService, { MediaFile } from '../../services/storage';
+import storageService, { MediaFile, BulkUploadProgress } from '../../services/storage';
 import authService, { UserProfile } from '../../services/auth';
 
 const { width } = Dimensions.get('window');
@@ -63,6 +65,15 @@ export default function VaultScreen() {
   const [selectedMedia, setSelectedMedia] = useState<MediaFile | null>(null);
   const [editingCaption, setEditingCaption] = useState(false);
   const [captionText, setCaptionText] = useState('');
+  
+  // Upload modal states - bringing from upload.tsx
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [selectedImages, setSelectedImages] = useState<{ uri: string; name: string; type: string }[]>([]);
+  const [caption, setCaption] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<BulkUploadProgress | null>(null);
+  const [previewModal, setPreviewModal] = useState({ visible: false, uri: '', type: '' });
+  
   const router = useRouter();
 
   useEffect(() => {
@@ -231,12 +242,9 @@ export default function VaultScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       
       if (failedCount === 0) {
-        Alert.alert('Success!', `All ${successCount} files uploaded successfully`);
+        Alert.alert('Success!', `All ${successCount} memories have been saved to the vault`);
       } else {
-        Alert.alert(
-          'Partial Success',
-          `${successCount} files uploaded, ${failedCount} failed`
-        );
+        Alert.alert('Partial Success', `${successCount} memories saved, ${failedCount} failed. Please try again for the failed uploads.`);
       }
     } catch (error) {
       console.error('Bulk upload error:', error);
@@ -247,53 +255,401 @@ export default function VaultScreen() {
     }
   };
 
+  // Upload modal functions - from upload.tsx
+  const pickImages = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      allowsMultipleSelection: true,
+      quality: 0.8,
+      selectionLimit: 10,
+      allowsEditing: false,
+    });
+    
+    if (!result.canceled && result.assets) {
+      const files = result.assets.map(asset => {
+        let detectedType = asset.type === 'video' ? 'video/mp4' : 'image/jpeg';
+        
+        if (asset.fileName) {
+          const extension = asset.fileName.toLowerCase().split('.').pop();
+          if (extension) {
+            const typeMap: Record<string, string> = {
+              'jpg': 'image/jpeg',
+              'jpeg': 'image/jpeg',
+              'png': 'image/png',
+              'gif': 'image/gif',
+              'webp': 'image/webp',
+              'mp4': 'video/mp4',
+              'mov': 'video/quicktime',
+              'avi': 'video/avi',
+              'pdf': 'application/pdf',
+              'doc': 'application/msword',
+              'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              'txt': 'text/plain',
+              'mp3': 'audio/mpeg',
+              'wav': 'audio/wav',
+              'm4a': 'audio/mp4',
+            };
+            detectedType = typeMap[extension] || detectedType;
+          }
+        }
+
+        return {
+          uri: asset.uri,
+          name: asset.fileName || `media_${Date.now()}.${detectedType.split('/')[1]}`,
+          type: detectedType,
+        };
+      });
+      setSelectedImages(files);
+    }
+  };
+  
+  const takePhotoForModal = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    
+    const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+    
+    if (cameraPermission.granted) {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        const file = {
+          uri: asset.uri,
+          name: asset.fileName || `photo_${Date.now()}.${asset.type === 'video' ? 'mp4' : 'jpg'}`,
+          type: asset.type === 'video' ? 'video/mp4' : 'image/jpeg',
+        };
+        setSelectedImages([file]);
+      }
+    } else {
+      Alert.alert("Camera Permission", "We need camera access to take photos for your vault.");
+    }
+  };
+  
+  const removeImage = (index: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSelectedImages(prev => prev.filter((_, i) => i !== index));
+  };
+  
+  const clearSelection = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSelectedImages([]);
+    setCaption('');
+    setUploadProgress(null);
+  };
+
+  const openPreview = (uri: string, type: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setPreviewModal({ visible: true, uri, type });
+  };
+
+  const closePreview = () => {
+    setPreviewModal({ visible: false, uri: '', type: '' });
+  };
+  
+  const handleUpload = async () => {
+    if (selectedImages.length === 0) {
+      console.log('❌ No images selected for upload');
+      return;
+    }
+
+    console.log('🚀 Starting upload process...');
+    console.log('📋 User profile:', userProfile);
+    console.log('📷 Selected images:', selectedImages.length, 'files');
+    console.log('📝 Caption:', caption);
+
+    try {
+      setIsUploading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      const currentUser = authService.getCurrentUser();
+      const currentProfile = authService.getUserProfile();
+      
+      console.log('👤 Current user:', currentUser?.uid);
+      console.log('📱 Current profile:', currentProfile ? 'loaded' : 'not loaded');
+      
+      if (!currentUser) {
+        console.error('❌ No authenticated user found');
+        Alert.alert("Authentication Error", "Please log in again to upload files.");
+        return;
+      }
+
+      console.log('✅ User authenticated, proceeding with upload...');
+      
+      const filesWithCaptions = selectedImages.map((file, index) => {
+        console.log(`📁 File ${index + 1}:`, {
+          name: file.name,
+          type: file.type,
+          uri: file.uri.substring(0, 50) + '...'
+        });
+        return {
+          ...file,
+          caption: caption.trim() || undefined,
+        };
+      });
+
+      console.log('📦 Files prepared for upload:', filesWithCaptions.length);
+
+      if (selectedImages.length === 1) {
+        const fileName = filesWithCaptions[0].name;
+        console.log('📤 Starting single file upload:', fileName);
+        
+        setUploadProgress({
+          totalFiles: 1,
+          completedFiles: 0,
+          currentFile: fileName,
+          overallProgress: 0,
+          files: [{
+            fileName,
+            progress: 0,
+            isCompleted: false,
+          }],
+        });
+
+        console.log('📡 Calling storageService.uploadFile...');
+        const result = await storageService.uploadFile(
+          filesWithCaptions[0].uri,
+          filesWithCaptions[0].name,
+          filesWithCaptions[0].type,
+          filesWithCaptions[0].caption,
+          (progress) => {
+            console.log('📊 Upload progress callback:', progress);
+            setUploadProgress(prev => prev ? {
+              ...prev,
+              overallProgress: progress,
+              files: [{
+                fileName,
+                progress,
+                isCompleted: progress === 100,
+              }],
+            } : null);
+          }
+        );
+
+        console.log('✅ Single upload result:', result ? 'success' : 'failed');
+
+        setUploadProgress(prev => prev ? {
+          ...prev,
+          completedFiles: 1,
+          overallProgress: 100,
+          files: [{
+            fileName,
+            progress: 100,
+            isCompleted: true,
+          }],
+        } : null);
+      } else {
+        console.log('📤 Starting bulk upload for', selectedImages.length, 'files');
+        
+        const initialProgress: BulkUploadProgress = {
+          totalFiles: selectedImages.length,
+          completedFiles: 0,
+          overallProgress: 0,
+          files: filesWithCaptions.map(file => ({
+            fileName: file.name,
+            progress: 0,
+            isCompleted: false,
+          })),
+        };
+        setUploadProgress(initialProgress);
+
+        console.log('📡 Calling storageService.uploadMultipleFiles...');
+        const results = await storageService.uploadMultipleFiles(
+          filesWithCaptions,
+          (progress) => {
+            console.log('📊 Bulk upload progress callback:', progress);
+            setUploadProgress(progress);
+          }
+        );
+
+        console.log('✅ Bulk upload results:', results.length, 'successful uploads');
+      }
+      
+      console.log('🎉 Upload process completed successfully!');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+      const photoCount = selectedImages.filter(img => img.type.startsWith('image/')).length;
+      const videoCount = selectedImages.filter(img => img.type.startsWith('video/')).length;
+      
+      let message = '';
+      if (selectedImages.length === 1) {
+        message = 'Your memory has been securely saved to the vault! 💖';
+      } else {
+        const parts = [];
+        if (photoCount > 0) parts.push(`${photoCount} photo${photoCount > 1 ? 's' : ''}`);
+        if (videoCount > 0) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
+        message = `Amazing! All ${parts.join(' and ')} have been securely saved to the vault! 💖`;
+      }
+
+      clearSelection();
+      setShowUploadModal(false);
+      
+      Alert.alert(
+        "Upload Successful! 🎉", 
+        message,
+        [{ text: 'OK', onPress: () => {} }],
+        { cancelable: false }
+      );
+
+    } catch (error) {
+      console.error('❌ Upload failed with error:', error);
+      
+      if (error instanceof Error) {
+        console.error('❌ Error name:', error.name);
+        console.error('❌ Error message:', error.message);
+        console.error('❌ Error stack:', error.stack);
+      }
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      
+      let errorMessage = "Please try again later.";
+      if (error instanceof Error) {
+        console.log('🔍 Analyzing error message:', error.message);
+        if (error.message.includes('No authenticated user') || error.message.includes('User must be authenticated')) {
+          errorMessage = "Please log in again to upload files.";
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          errorMessage = "Network error. Please check your connection and try again.";
+        } else if (error.message.includes('quota') || error.message.includes('storage')) {
+          errorMessage = "Storage quota exceeded. Please free up space.";
+        } else if (error.message.includes('Invalid file URI') || error.message.includes('Failed to process file')) {
+          errorMessage = "There was an issue with the selected file. Please try selecting a different file.";
+        } else if (error.message.includes('permission') || error.message.includes('unauthorized')) {
+          errorMessage = "Permission denied. Please check your account settings.";
+        }
+      }
+      
+      Alert.alert("Upload Failed", `${errorMessage}\n\nError details: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      console.log('🏁 Upload process finished, cleaning up...');
+      setIsUploading(false);
+      setUploadProgress(null);
+    }
+  };
+
   const showUploadOptions = () => {
     console.log('🔵 showUploadOptions called');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     
-    const options = ['Take Photo', 'Choose from Gallery', 'Go to Upload Page', 'Cancel'];
-    const cancelButtonIndex = 3;
-
     console.log('🔵 Platform:', Platform.OS, 'ActionSheetIOS available:', !!ActionSheetIOS);
 
-    if (Platform.OS === 'ios' && ActionSheetIOS) {
-      console.log('🔵 Using iOS ActionSheet');
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options,
-          cancelButtonIndex,
-          title: 'Add a Memory',
-        },
-        (buttonIndex: number) => {
-          console.log('🔵 ActionSheet button pressed:', buttonIndex);
-          if (buttonIndex === 0) {
-              takePhoto();
-          } else if (buttonIndex === 1) {
-              pickMultipleImages();
-          } else if (buttonIndex === 2) {
-            router.push('/(tabs)/upload');
-          }
-        }
-      );
-    } else {
-      console.log('🔵 Using Alert dialog');
+    // Force using Alert.alert regardless of platform for consistency
+    console.log('🔵 Showing Alert dialog');
+    
+    // Use setTimeout to ensure alert shows up
+    setTimeout(() => {
       Alert.alert(
         'Add a Memory',
         'Choose how you want to add your memory',
         [
-          { text: 'Take Photo', onPress: () => { console.log('🔵 Take Photo pressed'); takePhoto(); } },
-          { text: 'Choose from Gallery', onPress: () => { console.log('🔵 Choose from Gallery pressed'); pickMultipleImages(); } },
-          { text: 'Go to Upload Page', onPress: () => { console.log('🔵 Go to Upload Page pressed'); router.push('/(tabs)/upload'); } },
+          { 
+            text: 'Take Photo', 
+            onPress: () => { 
+              console.log('🔵 Take Photo pressed'); 
+              takePhoto(); 
+            } 
+          },
+          { 
+            text: 'Choose from Gallery', 
+            onPress: () => { 
+              console.log('🔵 Choose from Gallery pressed'); 
+              pickMultipleImages(); 
+            } 
+          },
+          { 
+            text: 'Go to Upload Page', 
+            onPress: () => { 
+              console.log('🔵 Go to Upload Page pressed'); 
+              router.push('/(tabs)/upload'); 
+            } 
+          },
           { text: 'Cancel', style: 'cancel' },
-        ]
+        ],
+        { cancelable: true }
       );
+    }, 100);
+  };
+
+  const quickUpload = async () => {
+    console.log('🚀 Quick upload started');
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsMultipleSelection: true,
+        quality: 0.8,
+        selectionLimit: 10,
+        allowsEditing: false,
+      });
+      
+      if (!result.canceled && result.assets) {
+        console.log('🚀 Files selected:', result.assets.length);
+        
+        const files = result.assets.map(asset => {
+          let detectedType = asset.type === 'video' ? 'video/mp4' : 'image/jpeg';
+          
+          if (asset.fileName) {
+            const extension = asset.fileName.toLowerCase().split('.').pop();
+            if (extension) {
+              const typeMap: Record<string, string> = {
+                'jpg': 'image/jpeg',
+                'jpeg': 'image/jpeg',
+                'png': 'image/png',
+                'gif': 'image/gif',
+                'webp': 'image/webp',
+                'mp4': 'video/mp4',
+                'mov': 'video/quicktime',
+                'avi': 'video/avi',
+              };
+              detectedType = typeMap[extension] || detectedType;
+            }
+          }
+
+          return {
+            uri: asset.uri,
+            name: asset.fileName || `media_${Date.now()}.${detectedType.split('/')[1]}`,
+            type: detectedType,
+          };
+        });
+
+        console.log('🚀 Starting upload for', files.length, 'files');
+        setIsLoading(true);
+
+        if (files.length === 1) {
+          // Single file upload
+          await uploadSingleFile(files[0]);
+        } else {
+          // Multiple files upload
+          await uploadMultipleFiles(files);
+        }
+      }
+    } catch (error) {
+      console.error('Quick upload error:', error);
+      setIsLoading(false);
+      setTimeout(() => {
+        Alert.alert('Upload Error', 'Failed to upload files. Please try again.');
+      }, 100);
     }
   };
 
   const quickUploadToVault = () => {
     console.log('🔴 Plus button clicked - quickUploadToVault called');
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    showUploadOptions();
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      // Show the upload modal directly
+      setShowUploadModal(true);
+    } catch (error) {
+      console.error('Error in quickUploadToVault:', error);
+      setTimeout(() => {
+        Alert.alert('Error', 'Failed to show upload options');
+      }, 100);
+    }
   };
 
   const toggleFavorite = async (mediaId: string) => {
@@ -336,40 +692,76 @@ export default function VaultScreen() {
   };
 
   const deleteMedia = async (mediaId: string) => {
-    const mediaItem = media.find(item => item.id === mediaId);
-    const mediaType = mediaItem?.category || 'item';
+    console.log('🗑️ Delete function called for mediaId:', mediaId);
     
-    Alert.alert(
-      'Delete Memory',
-      `Are you sure you want to permanently delete this ${mediaType}? This action cannot be undone.`,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await storageService.deleteMedia(mediaId);
-              
-              // Close modal if deleting the currently viewed media
-              if (selectedMedia?.id === mediaId) {
-                closeFullScreen();
-              }
-              
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              Alert.alert('Deleted', `${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} deleted successfully`);
-            } catch (error) {
-              console.error('Delete error:', error);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-              Alert.alert('Error', 'Failed to delete media');
-            }
-          },
-        },
-      ]
-    );
+    try {
+      const mediaItem = media.find(item => item.id === mediaId);
+      const mediaType = mediaItem?.category || 'item';
+      
+      console.log('🗑️ Found media item:', mediaItem ? 'yes' : 'no', 'type:', mediaType);
+      
+      // Use setTimeout to ensure alert shows up
+      setTimeout(() => {
+        Alert.alert(
+          'Delete Memory',
+          `Are you sure you want to permanently delete this ${mediaType}? This action cannot be undone.`,
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+              onPress: () => console.log('🗑️ Delete cancelled')
+            },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: async () => {
+                try {
+                  console.log('🗑️ Executing delete for:', mediaId);
+                  await storageService.deleteMedia(mediaId);
+                  
+                  // Close modal if deleting the currently viewed media
+                  if (selectedMedia?.id === mediaId) {
+                    closeFullScreen();
+                  }
+                  
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  
+                  // Show success message
+                  setTimeout(() => {
+                    Alert.alert(
+                      'Deleted', 
+                      `${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} deleted successfully`,
+                      [{ text: 'OK' }]
+                    );
+                  }, 100);
+                } catch (error) {
+                  console.error('Delete error:', error);
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+                  
+                  setTimeout(() => {
+                    Alert.alert(
+                      'Error', 
+                      'Failed to delete media. Please try again.',
+                      [{ text: 'OK' }]
+                    );
+                  }, 100);
+                }
+              },
+            },
+          ],
+          { cancelable: false }
+        );
+      }, 100);
+    } catch (error) {
+      console.error('Error in deleteMedia function:', error);
+      setTimeout(() => {
+        Alert.alert(
+          'Error', 
+          'Failed to delete media. Please try again.',
+          [{ text: 'OK' }]
+        );
+      }, 100);
+    }
   };
 
   const renderFilterBar = () => (
@@ -431,32 +823,38 @@ export default function VaultScreen() {
         )}
         
       {/* Actions */}
-          <View style={styles.mediaActions}>
-            <TouchableOpacity
+      <View style={styles.mediaActions}>
+        <TouchableOpacity
           onPress={(e) => {
+            console.log('❤️ Heart button pressed for:', item.id);
             e.stopPropagation();
             toggleFavorite(item.id);
           }}
-              style={styles.actionButton}
-            >
+          style={styles.actionButton}
+          activeOpacity={0.7}
+          hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+        >
           <Heart
             color={item.isFavorite ? "#ec4899" : "#ffffff"}
-                size={16} 
+            size={16} 
             fill={item.isFavorite ? "#ec4899" : "transparent"}
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
           onPress={(e) => {
+            console.log('🗑️ Delete button pressed for:', item.id);
             e.stopPropagation();
             deleteMedia(item.id);
           }}
-              style={styles.actionButton}
-            >
+          style={styles.actionButton}
+          activeOpacity={0.7}
+          hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+        >
           <Trash2 color="#ffffff" size={16} />
-            </TouchableOpacity>
-          </View>
-      </TouchableOpacity>
-    );
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
 
   const renderHeader = () => (
     <View style={styles.header}>
@@ -467,13 +865,18 @@ export default function VaultScreen() {
             {filteredMedia.length} {filteredMedia.length === 1 ? 'memory' : 'memories'}
           </Text>
         </View>
-            <TouchableOpacity 
+        <TouchableOpacity 
           style={styles.addButton}
-          onPress={quickUploadToVault}
+          onPress={() => {
+            console.log('🔴 Header plus button pressed');
+            quickUploadToVault();
+          }}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
           <Plus color="#ec4899" size={24} />
-            </TouchableOpacity>
-          </View>
+        </TouchableOpacity>
+      </View>
       {renderFilterBar()}
     </View>
   );
@@ -590,7 +993,14 @@ export default function VaultScreen() {
                 <View style={styles.fullScreenActions}>
                   <TouchableOpacity
                     style={styles.fullScreenActionButton}
-                    onPress={() => selectedMedia && toggleFavorite(selectedMedia.id)}
+                    onPress={() => {
+                      console.log('❤️ Modal heart button pressed for:', selectedMedia?.id);
+                      if (selectedMedia) {
+                        toggleFavorite(selectedMedia.id);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   >
                     <Heart
                       color={selectedMedia?.isFavorite ? "#ec4899" : "#ffffff"}
@@ -600,7 +1010,14 @@ export default function VaultScreen() {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.fullScreenActionButton}
-                    onPress={() => selectedMedia && deleteMedia(selectedMedia.id)}
+                    onPress={() => {
+                      console.log('🗑️ Modal delete button pressed for:', selectedMedia?.id);
+                      if (selectedMedia) {
+                        deleteMedia(selectedMedia.id);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   >
                     <Trash2 color="#ffffff" size={20} />
                   </TouchableOpacity>
@@ -661,14 +1078,251 @@ export default function VaultScreen() {
           </View>
         </Modal>
 
-        {isLoading && (
-          <View style={styles.uploadLoadingOverlay}>
-            <View style={styles.uploadLoadingContainer}>
-              <ActivityIndicator size="large" color="#ec4899" />
-              <Text style={styles.loadingText}>Uploading...</Text>
-            </View>
+        {/* Upload Modal - from upload.tsx */}
+        <Modal
+          visible={showUploadModal}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowUploadModal(false)}
+        >
+          <View style={styles.uploadModalContainer}>
+            <SafeAreaView style={styles.uploadModalSafeArea}>
+              {/* Upload Modal Header */}
+              <View style={styles.uploadModalHeader}>
+                <TouchableOpacity
+                  style={styles.uploadModalCloseButton}
+                  onPress={() => {
+                    setShowUploadModal(false);
+                    clearSelection();
+                  }}
+                >
+                  <X color="#6b7280" size={24} />
+                </TouchableOpacity>
+                <Text style={styles.uploadModalTitle}>Upload Memories</Text>
+                <View style={{ width: 24 }} />
+              </View>
+
+              {/* Preview Modal for selected images */}
+              <Modal
+                visible={previewModal.visible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={closePreview}
+              >
+                <View style={styles.previewModalContainer}>
+                  <TouchableOpacity style={styles.previewModalOverlay} onPress={closePreview} />
+                  <View style={styles.previewModalContent}>
+                    <TouchableOpacity style={styles.previewCloseButton} onPress={closePreview}>
+                      <X color="#fff" size={24} />
+                    </TouchableOpacity>
+                    {previewModal.type.startsWith('image/') ? (
+                      <Image 
+                        source={{ uri: previewModal.uri }} 
+                        style={styles.previewImage}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={styles.videoPreviewContainer}>
+                        <Text style={styles.videoPreviewText}>Video Preview</Text>
+                        <Text style={styles.videoPreviewSubtext}>Video playback not yet implemented</Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              </Modal>
+
+              {/* Loading overlay during uploads */}
+              {isUploading && (
+                <View style={styles.uploadLoadingOverlay}>
+                  <View style={styles.uploadLoadingContainer}>
+                    <ActivityIndicator size="large" color="#ec4899" />
+                    <Text style={styles.uploadLoadingText}>
+                      {uploadProgress?.totalFiles === 1 ? 'Uploading memory...' : 'Uploading memories...'}
+                    </Text>
+                    {uploadProgress && (
+                      <>
+                        <View style={styles.progressBarContainer}>
+                          <View style={styles.progressBar}>
+                            <View 
+                              style={[
+                                styles.progressFill, 
+                                { width: `${uploadProgress.overallProgress}%` }
+                              ]} 
+                            />
+                          </View>
+                        </View>
+                        <Text style={styles.uploadProgressText}>
+                          {Math.round(uploadProgress.overallProgress)}% complete
+                        </Text>
+                        {uploadProgress.currentFile && (
+                          <Text style={styles.currentFileText}>
+                            Uploading: {uploadProgress.currentFile}
+                          </Text>
+                        )}
+                      </>
+                    )}
+                  </View>
+                </View>
+              )}
+
+              <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                style={styles.uploadModalKeyboardAvoid}
+              >
+                <ScrollView 
+                  style={styles.uploadModalScrollContainer}
+                  contentContainerStyle={styles.uploadModalScrollContent}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <View style={styles.uploadModalContent}>
+                    <View style={styles.uploadModalHeaderSection}>
+                      <Heart color="#ec4899" size={24} />
+                      <Text style={styles.uploadModalHeaderTitle}>Upload Memories</Text>
+                      <Text style={styles.uploadModalHeaderSubtitle}>
+                        {userProfile?.partnerStatus === 'connected' 
+                          ? 'Share precious moments with your partner'
+                          : 'Preserve your precious moments securely'
+                        }
+                      </Text>
+                    </View>
+                    
+                    {selectedImages.length > 0 ? (
+                      <View style={styles.selectedContainer}>
+                        <View style={styles.selectedHeader}>
+                          <Text style={styles.selectedTitle}>
+                            {selectedImages.length} {selectedImages.length === 1 ? 'Memory' : 'Memories'} Selected
+                          </Text>
+                          <TouchableOpacity
+                            style={styles.clearAllButton}
+                            onPress={clearSelection}
+                          >
+                            <X color="#6b7280" size={20} />
+                          </TouchableOpacity>
+                        </View>
+
+                        <ScrollView 
+                          horizontal 
+                          showsHorizontalScrollIndicator={false}
+                          style={styles.selectedImagesScroll}
+                          contentContainerStyle={styles.selectedImagesContent}
+                        >
+                          {selectedImages.map((image, index) => (
+                            <View key={index} style={styles.selectedImageContainer}>
+                              <TouchableOpacity 
+                                onPress={() => openPreview(image.uri, image.type)}
+                                activeOpacity={0.8}
+                              >
+                                <Image 
+                                  source={{ uri: image.uri }} 
+                                  style={styles.selectedImage}
+                                  resizeMode="cover"
+                                />
+                                <View style={styles.previewIconContainer}>
+                                  <ZoomIn color="#fff" size={16} />
+                                </View>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.removeButton}
+                                onPress={() => removeImage(index)}
+                              >
+                                <X color="#fff" size={16} />
+                              </TouchableOpacity>
+                            </View>
+                          ))}
+                        </ScrollView>
+                        
+                        <View style={styles.captionContainer}>
+                          <Text style={styles.captionLabel}>Add a memory note (optional)</Text>
+                          <TextInput
+                            style={styles.captionInput}
+                            placeholder="What makes these moments special?"
+                            placeholderTextColor="#9ca3af"
+                            value={caption}
+                            onChangeText={setCaption}
+                            multiline
+                            maxLength={200}
+                          />
+                          <Text style={styles.characterCount}>{caption.length}/200</Text>
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={styles.selectContainer}>
+                        <Text style={styles.selectText}>Choose how to capture your memories</Text>
+                        
+                        <View style={styles.optionsContainer}>
+                          <TouchableOpacity
+                            style={styles.optionButton}
+                            onPress={takePhotoForModal}
+                            activeOpacity={0.8}
+                          >
+                            <View style={styles.optionContent}>
+                              <View style={styles.optionIconContainer}>
+                                <Camera color="#ec4899" size={28} />
+                              </View>
+                              <Text style={styles.optionText}>Take Photo</Text>
+                              <Text style={styles.optionSubtext}>Capture new moments</Text>
+                            </View>
+                          </TouchableOpacity>
+                          
+                          <TouchableOpacity
+                            style={styles.optionButton}
+                            onPress={pickImages}
+                            activeOpacity={0.8}
+                          >
+                            <View style={styles.optionContent}>
+                              <View style={styles.optionIconContainer}>
+                                <ImageIcon color="#ec4899" size={28} />
+                              </View>
+                              <Text style={styles.optionText}>From Gallery</Text>
+                              <Text style={styles.optionSubtext}>Choose existing photos & videos</Text>
+                            </View>
+                          </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.securityContainer}>
+                          <Text style={styles.securityNote}>
+                            🔒 All files are encrypted and secured
+                          </Text>
+                          <Text style={styles.securitySubNote}>
+                            {userProfile?.partnerStatus === 'connected' 
+                              ? 'Shared securely with your partner'
+                              : 'Only you can access your precious memories'
+                            }
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                      
+                    {/* Fixed upload button */}
+                    {selectedImages.length > 0 && (
+                      <View style={styles.uploadButtonContainer}>
+                        <TouchableOpacity
+                          style={[
+                            styles.uploadButton,
+                            isUploading && styles.uploadButtonDisabled
+                          ]}
+                          onPress={handleUpload}
+                          disabled={isUploading}
+                        >
+                          {isUploading ? (
+                            <ActivityIndicator color="#fff" size="small" />
+                          ) : (
+                            <>
+                              <UploadIcon color="#fff" size={20} />
+                              <Text style={styles.uploadButtonText}>
+                                Upload to Vault
+                              </Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                </ScrollView>
+              </KeyboardAvoidingView>
+            </SafeAreaView>
           </View>
-        )}
+        </Modal>
         
         {filteredMedia.length === 0 ? (
           <ScrollView 
@@ -1040,5 +1694,339 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#e5e7eb',
     lineHeight: 22,
+  },
+  uploadModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  uploadModalSafeArea: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  uploadModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  uploadModalCloseButton: {
+    padding: 8,
+  },
+  uploadModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  previewModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewModalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+  },
+  previewModalContent: {
+    width: '90%',
+    height: '80%',
+    backgroundColor: '#000',
+    borderRadius: 16,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  previewCloseButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 10,
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 20,
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'contain',
+  },
+  videoPreviewContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000',
+  },
+  videoPreviewText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  videoPreviewSubtext: {
+    fontSize: 16,
+    color: '#ccc',
+  },
+  uploadLoadingText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  progressBarContainer: {
+    width: '100%',
+    marginBottom: 16,
+  },
+  progressBar: {
+    width: '100%',
+    height: 4,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#ec4899',
+    borderRadius: 2,
+  },
+  uploadProgressText: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  currentFileText: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  uploadModalKeyboardAvoid: {
+    flex: 1,
+  },
+  uploadModalScrollContainer: {
+    flex: 1,
+  },
+  uploadModalScrollContent: {
+    padding: 24,
+    paddingBottom: 120,
+  },
+  uploadModalContent: {
+    flex: 1,
+  },
+  uploadModalHeaderSection: {
+    alignItems: 'center',
+    marginBottom: 40,
+    paddingTop: 20,
+  },
+  uploadModalHeaderTitle: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  uploadModalHeaderSubtitle: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 22,
+    paddingHorizontal: 16,
+  },
+  selectedContainer: {
+    marginBottom: 32,
+  },
+  selectedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  selectedTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  clearAllButton: {
+    padding: 8,
+    backgroundColor: '#f9fafb',
+    borderRadius: 20,
+  },
+  selectedImagesScroll: {
+    marginBottom: 24,
+  },
+  selectedImagesContent: {
+    paddingHorizontal: 4,
+    gap: 12,
+  },
+  selectedImageContainer: {
+    position: 'relative',
+    marginRight: 12,
+  },
+  selectedImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 12,
+  },
+  previewIconContainer: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    padding: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 12,
+  },
+  removeButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 24,
+    height: 24,
+    backgroundColor: '#ef4444',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  captionContainer: {
+    backgroundColor: '#f9fafb',
+    padding: 20,
+    borderRadius: 16,
+  },
+  captionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 12,
+  },
+  captionInput: {
+    backgroundColor: '#ffffff',
+    color: '#1f2937',
+    fontSize: 16,
+    padding: 16,
+    borderRadius: 12,
+    minHeight: 80,
+    textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    marginBottom: 8,
+  },
+  characterCount: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'right',
+  },
+  selectContainer: {
+    flex: 1,
+    justifyContent: 'flex-start',
+    paddingBottom: 40,
+  },
+  selectText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1f2937',
+    textAlign: 'center',
+    marginBottom: 48,
+    lineHeight: 28,
+  },
+  optionsContainer: {
+    gap: 20,
+    marginBottom: 40,
+  },
+  optionButton: {
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  optionContent: {
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
+    borderRadius: 16,
+  },
+  optionIconContainer: {
+    marginBottom: 16,
+    padding: 16,
+    backgroundColor: '#fdf2f8',
+    borderRadius: 50,
+  },
+  optionText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  optionSubtext: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  securityContainer: {
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#f9fafb',
+    borderRadius: 16,
+  },
+  securityNote: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6b7280',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  securitySubNote: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'center',
+  },
+  uploadButtonContainer: {
+    marginTop: 32,
+    paddingHorizontal: 24,
+  },
+  uploadButton: {
+    backgroundColor: '#ec4899',
+    padding: 18,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    shadowColor: '#ec4899',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  uploadButtonDisabled: {
+    backgroundColor: '#d1d5db',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  uploadButtonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
   },
 });
