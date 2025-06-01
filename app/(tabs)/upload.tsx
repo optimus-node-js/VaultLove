@@ -9,16 +9,20 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Alert
+  Alert,
+  Modal,
+  Dimensions
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
-import { Camera, Image as ImageIcon, X, Upload as UploadIcon, Heart, Grid2x2 } from 'lucide-react-native';
+import { Camera, Image as ImageIcon, X, Upload as UploadIcon, Heart, Grid2x2, ZoomIn } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import storageService, { BulkUploadProgress } from '../../services/storage';
 import authService, { UserProfile } from '../../services/auth';
+
+const { width, height } = Dimensions.get('window');
 
 export default function UploadScreen() {
   const [selectedImages, setSelectedImages] = useState<{ uri: string; name: string; type: string }[]>([]);
@@ -26,6 +30,7 @@ export default function UploadScreen() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<BulkUploadProgress | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [previewModal, setPreviewModal] = useState({ visible: false, uri: '', type: '' });
   const router = useRouter();
 
   useEffect(() => {
@@ -79,7 +84,7 @@ export default function UploadScreen() {
         }
 
         return {
-          uri: asset.uri,
+        uri: asset.uri,
           name: asset.fileName || `media_${Date.now()}.${detectedType.split('/')[1]}`,
           type: detectedType,
         };
@@ -125,13 +130,39 @@ export default function UploadScreen() {
     setCaption('');
     setUploadProgress(null);
   };
+
+  const openPreview = (uri: string, type: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setPreviewModal({ visible: true, uri, type });
+  };
+
+  const closePreview = () => {
+    setPreviewModal({ visible: false, uri: '', type: '' });
+  };
   
   const handleUpload = async () => {
     if (selectedImages.length === 0) return;
 
+    // Debug logging
+    console.log('Starting upload process...');
+    console.log('User profile:', userProfile);
+    console.log('Selected images:', selectedImages);
+
     try {
       setIsUploading(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      // Check authentication first
+      const currentUser = authService.getCurrentUser();
+      const currentProfile = authService.getUserProfile();
+      
+      console.log('Current user:', currentUser?.uid);
+      console.log('Current profile:', currentProfile);
+      
+      if (!currentUser) {
+        Alert.alert("Authentication Error", "Please log in again to upload files.");
+        return;
+      }
       
       // Add caption to all files
       const filesWithCaptions = selectedImages.map(file => ({
@@ -139,9 +170,13 @@ export default function UploadScreen() {
         caption: caption.trim() || undefined,
       }));
 
+      console.log('Files with captions:', filesWithCaptions);
+
       if (selectedImages.length === 1) {
         // Single upload with real-time progress
         const fileName = filesWithCaptions[0].name;
+        console.log('Starting single file upload:', fileName);
+        
         setUploadProgress({
           totalFiles: 1,
           completedFiles: 0,
@@ -154,12 +189,13 @@ export default function UploadScreen() {
           }],
         });
 
-        await storageService.uploadFile(
+        const result = await storageService.uploadFile(
           filesWithCaptions[0].uri,
           filesWithCaptions[0].name,
           filesWithCaptions[0].type,
           filesWithCaptions[0].caption,
           (progress) => {
+            console.log('Upload progress:', progress);
             setUploadProgress(prev => prev ? {
               ...prev,
               overallProgress: progress,
@@ -171,6 +207,8 @@ export default function UploadScreen() {
             } : null);
           }
         );
+
+        console.log('Upload result:', result);
 
         // Final update
         setUploadProgress(prev => prev ? {
@@ -185,6 +223,8 @@ export default function UploadScreen() {
         } : null);
       } else {
         // Bulk upload with detailed progress tracking
+        console.log('Starting bulk upload for', selectedImages.length, 'files');
+        
         const initialProgress: BulkUploadProgress = {
           totalFiles: selectedImages.length,
           completedFiles: 0,
@@ -197,12 +237,15 @@ export default function UploadScreen() {
         };
         setUploadProgress(initialProgress);
 
-        await storageService.uploadMultipleFiles(
+        const results = await storageService.uploadMultipleFiles(
           filesWithCaptions,
           (progress) => {
+            console.log('Bulk upload progress:', progress);
             setUploadProgress(progress);
           }
         );
+
+        console.log('Bulk upload results:', results);
       }
       
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -241,7 +284,21 @@ export default function UploadScreen() {
     } catch (error) {
       console.error('Upload failed:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert("Upload Failed", "Please try again later.");
+      
+      // More detailed error handling
+      let errorMessage = "Please try again later.";
+      if (error instanceof Error) {
+        console.log('Error message:', error.message);
+        if (error.message.includes('No authenticated user')) {
+          errorMessage = "Please log in again to upload files.";
+        } else if (error.message.includes('network')) {
+          errorMessage = "Network error. Please check your connection.";
+        } else if (error.message.includes('quota')) {
+          errorMessage = "Storage quota exceeded. Please free up space.";
+        }
+      }
+      
+      Alert.alert("Upload Failed", errorMessage);
     } finally {
       setIsUploading(false);
       setUploadProgress(null);
@@ -253,9 +310,38 @@ export default function UploadScreen() {
     router.push('/(tabs)');
   };
 
-  return (
+    return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
+        {/* Preview Modal */}
+        <Modal
+          visible={previewModal.visible}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={closePreview}
+        >
+          <View style={styles.previewModalContainer}>
+            <TouchableOpacity style={styles.previewModalOverlay} onPress={closePreview} />
+            <View style={styles.previewModalContent}>
+              <TouchableOpacity style={styles.previewCloseButton} onPress={closePreview}>
+                <X color="#fff" size={24} />
+              </TouchableOpacity>
+              {previewModal.type.startsWith('image/') ? (
+                <Image 
+                  source={{ uri: previewModal.uri }} 
+                  style={styles.previewImage}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View style={styles.videoPreviewContainer}>
+                  <Text style={styles.videoPreviewText}>Video Preview</Text>
+                  <Text style={styles.videoPreviewSubtext}>Video playback not yet implemented</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </Modal>
+
         {/* Loading overlay only during uploads */}
         {isUploading && (
           <View style={styles.uploadLoadingOverlay}>
@@ -263,27 +349,27 @@ export default function UploadScreen() {
               <ActivityIndicator size="large" color="#ec4899" />
               <Text style={styles.uploadLoadingText}>
                 {uploadProgress?.totalFiles === 1 ? 'Uploading memory...' : 'Uploading memories...'}
-              </Text>
+        </Text>
               {uploadProgress && (
                 <>
                   <View style={styles.progressBarContainer}>
-                    <View style={styles.progressBar}>
-                      <View 
-                        style={[
-                          styles.progressFill, 
-                          { width: `${uploadProgress.overallProgress}%` }
-                        ]} 
-                      />
-                    </View>
+        <View style={styles.progressBar}>
+          <View 
+            style={[
+              styles.progressFill, 
+              { width: `${uploadProgress.overallProgress}%` }
+            ]} 
+          />
+        </View>
                   </View>
                   <Text style={styles.uploadProgressText}>
                     {Math.round(uploadProgress.overallProgress)}% complete
-                  </Text>
-                  {uploadProgress.currentFile && (
-                    <Text style={styles.currentFileText}>
+        </Text>
+        {uploadProgress.currentFile && (
+          <Text style={styles.currentFileText}>
                       Uploading: {uploadProgress.currentFile}
-                    </Text>
-                  )}
+          </Text>
+        )}
                 </>
               )}
             </View>
@@ -294,9 +380,14 @@ export default function UploadScreen() {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.keyboardAvoid}
         >
-          <View style={styles.content}>
+          <ScrollView 
+            style={styles.scrollContainer}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.content}>
             <View style={styles.header}>
-              <Heart color="#ec4899" size={24} />
+                <Heart color="#ec4899" size={24} />
               <Text style={styles.title}>Upload Memories</Text>
               <Text style={styles.subtitle}>
                 {userProfile?.partnerStatus === 'connected' 
@@ -307,11 +398,7 @@ export default function UploadScreen() {
             </View>
             
             {selectedImages.length > 0 ? (
-              <ScrollView 
-                style={styles.selectedContainer}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.selectedScrollContent}
-              >
+              <View style={styles.selectedContainer}>
                 <View style={styles.selectedHeader}>
                   <Text style={styles.selectedTitle}>
                     {selectedImages.length} {selectedImages.length === 1 ? 'Memory' : 'Memories'} Selected
@@ -320,7 +407,7 @@ export default function UploadScreen() {
                     style={styles.clearAllButton}
                     onPress={clearSelection}
                   >
-                    <X color="#6b7280" size={20} />
+                      <X color="#6b7280" size={20} />
                   </TouchableOpacity>
                 </View>
 
@@ -328,15 +415,23 @@ export default function UploadScreen() {
                   horizontal 
                   showsHorizontalScrollIndicator={false}
                   style={styles.selectedImagesScroll}
-                  contentContainerStyle={styles.selectedImagesContent}
+                    contentContainerStyle={styles.selectedImagesContent}
                 >
                   {selectedImages.map((image, index) => (
                     <View key={index} style={styles.selectedImageContainer}>
-                      <Image 
-                        source={{ uri: image.uri }} 
-                        style={styles.selectedImage}
-                        resizeMode="cover"
-                      />
+                      <TouchableOpacity 
+                        onPress={() => openPreview(image.uri, image.type)}
+                        activeOpacity={0.8}
+                      >
+                        <Image 
+                          source={{ uri: image.uri }} 
+                          style={styles.selectedImage}
+                          resizeMode="cover"
+                        />
+                        <View style={styles.previewIconContainer}>
+                          <ZoomIn color="#fff" size={16} />
+                        </View>
+                      </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.removeButton}
                         onPress={() => removeImage(index)}
@@ -352,7 +447,7 @@ export default function UploadScreen() {
                   <TextInput
                     style={styles.captionInput}
                     placeholder="What makes these moments special?"
-                    placeholderTextColor="#9ca3af"
+                      placeholderTextColor="#9ca3af"
                     value={caption}
                     onChangeText={setCaption}
                     multiline
@@ -360,7 +455,7 @@ export default function UploadScreen() {
                   />
                   <Text style={styles.characterCount}>{caption.length}/200</Text>
                 </View>
-              </ScrollView>
+              </View>
             ) : (
               <View style={styles.selectContainer}>
                 <Text style={styles.selectText}>Choose how to capture your memories</Text>
@@ -371,13 +466,13 @@ export default function UploadScreen() {
                     onPress={takePhoto}
                     activeOpacity={0.8}
                   >
-                    <View style={styles.optionContent}>
+                      <View style={styles.optionContent}>
                       <View style={styles.optionIconContainer}>
-                        <Camera color="#ec4899" size={28} />
+                          <Camera color="#ec4899" size={28} />
                       </View>
                       <Text style={styles.optionText}>Take Photo</Text>
                       <Text style={styles.optionSubtext}>Capture new moments</Text>
-                    </View>
+                      </View>
                   </TouchableOpacity>
                   
                   <TouchableOpacity
@@ -385,18 +480,18 @@ export default function UploadScreen() {
                     onPress={pickImages}
                     activeOpacity={0.8}
                   >
-                    <View style={styles.optionContent}>
+                      <View style={styles.optionContent}>
                       <View style={styles.optionIconContainer}>
-                        <ImageIcon color="#ec4899" size={28} />
+                          <ImageIcon color="#ec4899" size={28} />
                       </View>
                       <Text style={styles.optionText}>From Gallery</Text>
                       <Text style={styles.optionSubtext}>Choose existing photos & videos</Text>
-                    </View>
+                      </View>
                   </TouchableOpacity>
                 </View>
 
                 <TouchableOpacity style={styles.vaultButton} onPress={goToVault}>
-                  <Grid2x2 color="#6b7280" size={20} />
+                    <Grid2x2 color="#6b7280" size={20} />
                   <Text style={styles.vaultButtonText}>View Your Vault</Text>
                 </TouchableOpacity>
                 
@@ -413,32 +508,33 @@ export default function UploadScreen() {
                 </View>
               </View>
             )}
-            
-            {/* Fixed upload button */}
-            {selectedImages.length > 0 && (
-              <View style={styles.uploadButtonContainer}>
-                <TouchableOpacity
-                  style={[
-                    styles.uploadButton,
-                    isUploading && styles.uploadButtonDisabled
-                  ]}
-                  onPress={handleUpload}
-                  disabled={isUploading}
-                >
-                  {isUploading ? (
-                    <ActivityIndicator color="#fff" size="small" />
-                  ) : (
-                    <>
-                      <UploadIcon color="#fff" size={20} />
-                      <Text style={styles.uploadButtonText}>
-                        Upload to Vault
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
+              
+              {/* Fixed upload button */}
+              {selectedImages.length > 0 && (
+                <View style={styles.uploadButtonContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.uploadButton,
+                      isUploading && styles.uploadButtonDisabled
+                    ]}
+                    onPress={handleUpload}
+                    disabled={isUploading}
+                  >
+                    {isUploading ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <>
+                        <UploadIcon color="#fff" size={20} />
+                        <Text style={styles.uploadButtonText}>
+                          Upload to Vault
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </View>
@@ -456,13 +552,19 @@ const styles = StyleSheet.create({
   keyboardAvoid: {
     flex: 1,
   },
+  scrollContainer: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 24,
+    paddingBottom: 120, // Extra space for footer
+  },
   content: {
     flex: 1,
-    padding: 24,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 40,
     paddingTop: 20,
   },
   title: {
@@ -470,27 +572,31 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1f2937',
     marginTop: 12,
-    marginBottom: 8,
+    marginBottom: 12,
   },
   subtitle: {
     fontSize: 16,
     color: '#6b7280',
     textAlign: 'center',
+    lineHeight: 22,
+    paddingHorizontal: 16,
   },
   selectContainer: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    paddingBottom: 40,
   },
   selectText: {
     fontSize: 20,
     fontWeight: '600',
     color: '#1f2937',
     textAlign: 'center',
-    marginBottom: 40,
+    marginBottom: 48,
+    lineHeight: 28,
   },
   optionsContainer: {
     gap: 20,
-    marginBottom: 32,
+    marginBottom: 40,
   },
   optionButton: {
     borderRadius: 16,
@@ -534,7 +640,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9fafb',
     borderRadius: 12,
     padding: 16,
-    marginBottom: 24,
+    marginBottom: 32,
     gap: 8,
     borderWidth: 1,
     borderColor: '#e5e7eb',
@@ -551,31 +657,30 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#fce7f3',
+    marginTop: 8,
   },
   securityNote: {
     fontSize: 16,
     fontWeight: '500',
     color: '#ec4899',
     textAlign: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   securitySubNote: {
     fontSize: 14,
     color: '#6b7280',
     textAlign: 'center',
+    lineHeight: 20,
   },
   selectedContainer: {
     flex: 1,
-    marginBottom: 24,
-  },
-  selectedScrollContent: {
-    paddingBottom: 20,
+    marginBottom: 32,
   },
   selectedHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   selectedTitle: {
     fontSize: 18,
@@ -599,22 +704,41 @@ const styles = StyleSheet.create({
   selectedImageContainer: {
     position: 'relative',
     marginRight: 12,
+    paddingTop: 8,
+    paddingRight: 8,
   },
   selectedImage: {
     width: 100,
     height: 100,
     borderRadius: 12,
   },
-  removeButton: {
+  previewIconContainer: {
     position: 'absolute',
-    top: -6,
-    right: -6,
-    backgroundColor: '#ef4444',
-    borderRadius: 12,
+    bottom: 8,
+    right: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 8,
     padding: 4,
   },
+  removeButton: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    backgroundColor: '#ef4444',
+    borderRadius: 15,
+    padding: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   captionContainer: {
-    marginBottom: 24,
+    marginBottom: 32,
   },
   captionLabel: {
     fontSize: 16,
@@ -640,9 +764,11 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   uploadButtonContainer: {
-    paddingTop: 16,
+    paddingTop: 24,
+    paddingBottom: 16,
     borderTopWidth: 1,
     borderTopColor: '#f3f4f6',
+    marginTop: 16,
   },
   uploadButton: {
     backgroundColor: '#ec4899',
@@ -732,5 +858,55 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginTop: 8,
     textAlign: 'center',
+  },
+  previewModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewModalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  previewModalContent: {
+    width: width * 0.9,
+    height: height * 0.8,
+    backgroundColor: '#000',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  previewCloseButton: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 20,
+    padding: 8,
+    zIndex: 10,
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  videoPreviewContainer: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1f1f1f',
+  },
+  videoPreviewText: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  videoPreviewSubtext: {
+    fontSize: 16,
+    color: '#9ca3af',
   },
 });

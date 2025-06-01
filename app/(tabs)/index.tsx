@@ -33,6 +33,7 @@ import {
   Grid3X3,
   Filter,
 } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
 
 // Platform-specific ActionSheet import
 let ActionSheetIOS: any = null;
@@ -55,6 +56,7 @@ export default function VaultScreen() {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [filter, setFilter] = useState<'all' | 'photos' | 'videos' | 'documents' | 'audio'>('all');
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
     let mounted = true;
@@ -62,16 +64,16 @@ export default function VaultScreen() {
     // Subscribe to user profile changes
     const unsubscribeProfile = authService.onProfileChange((profile) => {
       if (mounted) {
-        setUserProfile(profile);
+      setUserProfile(profile);
       }
     });
 
     // Subscribe to media changes with error handling
     const unsubscribeMedia = storageService.subscribeToUserMedia((mediaFiles) => {
       if (mounted) {
-        setMedia(mediaFiles);
+      setMedia(mediaFiles);
         setIsInitialLoading(false);
-        setIsRefreshing(false);
+      setIsRefreshing(false);
       }
     });
 
@@ -82,7 +84,7 @@ export default function VaultScreen() {
       }
     }, 2000); // Reduced to 2 seconds
 
-    return () => {
+      return () => {
       mounted = false;
       clearTimeout(loadingTimeout);
       unsubscribeProfile();
@@ -217,8 +219,10 @@ export default function VaultScreen() {
   };
 
   const showUploadOptions = () => {
-    const options = ['Take Photo', 'Choose from Gallery', 'Cancel'];
-    const cancelButtonIndex = 2;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    
+    const options = ['Take Photo', 'Choose from Gallery', 'Go to Upload Page', 'Cancel'];
+    const cancelButtonIndex = 3;
 
     if (Platform.OS === 'ios' && ActionSheetIOS) {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -229,9 +233,11 @@ export default function VaultScreen() {
         },
         (buttonIndex: number) => {
           if (buttonIndex === 0) {
-            takePhoto();
+              takePhoto();
           } else if (buttonIndex === 1) {
-            pickMultipleImages();
+              pickMultipleImages();
+          } else if (buttonIndex === 2) {
+            router.push('/(tabs)/upload');
           }
         }
       );
@@ -242,10 +248,16 @@ export default function VaultScreen() {
         [
           { text: 'Take Photo', onPress: takePhoto },
           { text: 'Choose from Gallery', onPress: pickMultipleImages },
+          { text: 'Go to Upload Page', onPress: () => router.push('/(tabs)/upload') },
           { text: 'Cancel', style: 'cancel' },
         ]
       );
     }
+  };
+
+  const quickUploadToVault = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    router.push('/(tabs)/upload');
   };
 
   const toggleFavorite = async (mediaId: string) => {
@@ -322,10 +334,10 @@ export default function VaultScreen() {
   const renderMediaItem = ({ item }: { item: MediaFile }) => (
     <TouchableOpacity style={styles.mediaItem}>
       <Image source={{ uri: item.thumbnailURL || item.downloadURL }} style={styles.mediaImage} />
-      
+        
       {/* Media type indicators */}
       {item.category === 'video' && (
-        <View style={styles.videoOverlay}>
+          <View style={styles.videoOverlay}>
           <Play color="#ffffff" size={24} fill="#ffffff" />
         </View>
       )}
@@ -333,43 +345,43 @@ export default function VaultScreen() {
       {item.category === 'document' && (
         <View style={styles.documentOverlay}>
           <Text style={styles.documentIcon}>📄</Text>
-        </View>
-      )}
-
+          </View>
+        )}
+        
       {item.category === 'audio' && (
         <View style={styles.audioOverlay}>
           <Text style={styles.audioIcon}>🎵</Text>
-        </View>
-      )}
-
+          </View>
+        )}
+        
       {/* Favorite Heart */}
       {item.isFavorite && (
         <View style={styles.favoriteOverlay}>
           <Heart color="#ec4899" size={16} fill="#ec4899" />
-        </View>
-      )}
-
+          </View>
+        )}
+        
       {/* Actions */}
-      <View style={styles.mediaActions}>
-        <TouchableOpacity
+          <View style={styles.mediaActions}>
+            <TouchableOpacity
           onPress={() => toggleFavorite(item.id)}
-          style={styles.actionButton}
-        >
+              style={styles.actionButton}
+            >
           <Heart
             color={item.isFavorite ? "#ec4899" : "#ffffff"}
-            size={16}
+                size={16} 
             fill={item.isFavorite ? "#ec4899" : "transparent"}
-          />
-        </TouchableOpacity>
-        <TouchableOpacity
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
           onPress={() => deleteMedia(item.id)}
-          style={styles.actionButton}
-        >
+              style={styles.actionButton}
+            >
           <Trash2 color="#ffffff" size={16} />
-        </TouchableOpacity>
-      </View>
-    </TouchableOpacity>
-  );
+            </TouchableOpacity>
+          </View>
+      </TouchableOpacity>
+    );
 
   const renderHeader = () => (
     <View style={styles.header}>
@@ -380,13 +392,13 @@ export default function VaultScreen() {
             {filteredMedia.length} {filteredMedia.length === 1 ? 'memory' : 'memories'}
           </Text>
         </View>
-        <TouchableOpacity
+            <TouchableOpacity 
           style={styles.addButton}
-          onPress={showUploadOptions}
+          onPress={quickUploadToVault}
         >
           <Plus color="#ec4899" size={24} />
-        </TouchableOpacity>
-      </View>
+            </TouchableOpacity>
+          </View>
       {renderFilterBar()}
     </View>
   );
@@ -402,19 +414,19 @@ export default function VaultScreen() {
       </Text>
       <TouchableOpacity
         style={styles.emptyButton}
-        onPress={showUploadOptions}
+        onPress={quickUploadToVault}
       >
         <Plus color="#ffffff" size={20} />
         <Text style={styles.emptyButtonText}>Add your first memory</Text>
       </TouchableOpacity>
     </View>
   );
-
+  
   if (isInitialLoading && media.length === 0) {
-    return (
+  return (
       <View style={styles.container}>
         <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
-        <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea}>
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#ec4899" />
             <Text style={styles.loadingText}>Loading your memories...</Text>
@@ -524,7 +536,7 @@ const styles = StyleSheet.create({
     shadowOffset: {
       width: 0,
       height: 2,
-    },
+  },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 4,
@@ -609,7 +621,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 40,
-    paddingTop: 80,
+    paddingTop: 40,
+    paddingBottom: 120,
   },
   emptyIconContainer: {
     width: 120,

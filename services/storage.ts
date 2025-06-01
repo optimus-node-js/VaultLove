@@ -1,25 +1,26 @@
 import { 
   ref, 
+  uploadBytes, 
   uploadBytesResumable, 
   getDownloadURL, 
   deleteObject, 
-  listAll,
+  listAll, 
   getMetadata,
-  UploadTask
+  updateMetadata
 } from 'firebase/storage';
 import { 
   collection, 
-  addDoc, 
   doc, 
+  addDoc, 
   updateDoc, 
   deleteDoc, 
-  getDocs, 
   query, 
   where, 
   orderBy, 
-  limit, 
-  onSnapshot,
-  serverTimestamp
+  onSnapshot, 
+  getDocs,
+  serverTimestamp,
+  Timestamp 
 } from 'firebase/firestore';
 import { storage, db, analytics } from '../config/firebase';
 import { logEvent } from 'firebase/analytics';
@@ -30,26 +31,18 @@ export interface MediaFile {
   fileName: string;
   originalName: string;
   mimeType: string;
-  category: 'photo' | 'video' | 'document' | 'audio' | 'other';
-  size: number;
+  category: 'photo' | 'video' | 'document' | 'audio';
+  fileSize: number;
   downloadURL: string;
   thumbnailURL?: string;
   storagePath: string;
-  userId: string;
-  partnerId?: string;
+  uploadedBy: string;
+  uploadedAt: Timestamp;
   caption?: string;
   tags?: string[];
   isFavorite: boolean;
-  createdAt: any;
-  updatedAt: any;
-}
-
-export interface UploadProgress {
-  fileName: string;
-  progress: number;
-  isCompleted: boolean;
-  error?: string;
-  downloadURL?: string;
+  isShared: boolean;
+  metadata?: Record<string, any>;
 }
 
 export interface BulkUploadProgress {
@@ -57,119 +50,150 @@ export interface BulkUploadProgress {
   completedFiles: number;
   currentFile?: string;
   overallProgress: number;
-  files: UploadProgress[];
+  files: Array<{
+    fileName: string;
+    progress: number;
+    isCompleted: boolean;
+    error?: string;
+  }>;
+}
+
+export interface UploadProgress {
+  fileName: string;
+  progress: number;
+  isCompleted: boolean;
+  downloadURL?: string;
+  error?: string;
 }
 
 class StorageService {
-  private uploadTasks: Map<string, UploadTask> = new Map();
   private mediaListeners: ((media: MediaFile[]) => void)[] = [];
 
-  // Helper function to categorize files based on MIME type
-  private categorizeFile(mimeType: string): 'photo' | 'video' | 'document' | 'audio' | 'other' {
-    if (mimeType.startsWith('image/')) {
-      return 'photo';
-    } else if (mimeType.startsWith('video/')) {
-      return 'video';
-    } else if (
-      mimeType.includes('pdf') ||
-      mimeType.includes('document') ||
-      mimeType.includes('text') ||
-      mimeType.includes('application/msword') ||
-      mimeType.includes('application/vnd.openxmlformats-officedocument') ||
-      mimeType.includes('application/vnd.ms-excel') ||
-      mimeType.includes('application/vnd.ms-powerpoint')
-    ) {
-      return 'document';
-    } else if (mimeType.startsWith('audio/')) {
-      return 'audio';
-    } else {
-      return 'other';
+  constructor() {
+    this.initializeService();
+  }
+
+  private async initializeService() {
+    try {
+      console.log('Storage service initialized');
+    } catch (error) {
+      console.error('Storage service initialization error:', error);
     }
   }
 
-  // Upload single file with progress
+  // File Upload Methods
   async uploadFile(
-    fileUri: string, 
-    fileName: string, 
-    mimeType: string, 
+    fileUri: string,
+    fileName: string,
+    mimeType: string,
     caption?: string,
     onProgress?: (progress: number) => void
   ): Promise<MediaFile> {
-    const user = authService.getCurrentUser();
-    const userProfile = authService.getUserProfile();
-    
-    if (!user || !userProfile) {
-      throw new Error('No authenticated user');
-    }
-
     try {
-      // Create file reference
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated to upload files');
+      }
+
+      console.log('Starting upload:', { fileName, mimeType, fileUri });
+
+      // Validate file URI
+      if (!fileUri || !fileUri.startsWith('file://') && !fileUri.startsWith('content://')) {
+        throw new Error('Invalid file URI provided');
+      }
+
+      // Create unique file name to avoid conflicts
       const timestamp = Date.now();
-      const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
-      const category = this.categorizeFile(mimeType);
-      const storagePath = `users/${user.uid}/media/${category}/${timestamp}_${sanitizedFileName}`;
+      const fileExtension = fileName.split('.').pop() || 'unknown';
+      const uniqueFileName = `${timestamp}_${Math.random().toString(36).substr(2, 9)}.${fileExtension}`;
+      
+      // Determine storage path based on file type
+      const category = this.determineFileCategory(mimeType);
+      const storagePath = `uploads/${currentUser.uid}/${category}/${uniqueFileName}`;
+      
+      console.log('Upload path:', storagePath);
+
+      // Create storage reference
       const storageRef = ref(storage, storagePath);
 
-      // Convert URI to blob for upload
-      const response = await fetch(fileUri);
-      const blob = await response.blob();
+      // Convert file URI to blob for upload
+      const blob = await this.uriToBlob(fileUri);
+      console.log('Blob created, size:', blob.size);
 
-      // Create upload task
+      // Create upload task with progress monitoring
       const uploadTask = uploadBytesResumable(storageRef, blob, {
         contentType: mimeType,
+        customMetadata: {
+          originalName: fileName,
+          uploadedBy: currentUser.uid,
+          uploadedAt: new Date().toISOString(),
+          category: category,
+          caption: caption || ''
+        }
       });
-
-      this.uploadTasks.set(fileName, uploadTask);
 
       return new Promise((resolve, reject) => {
         uploadTask.on(
           'state_changed',
           (snapshot) => {
             const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            console.log(`Upload progress: ${progress}%`);
             onProgress?.(progress);
           },
           (error) => {
-            this.uploadTasks.delete(fileName);
             console.error('Upload error:', error);
-            reject(error);
+            reject(new Error(`Upload failed: ${error.message}`));
           },
           async () => {
             try {
-              this.uploadTasks.delete(fileName);
+              // Upload completed successfully
+              console.log('Upload completed, getting download URL...');
               const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-              
-              // Save metadata to Firestore with category
+              console.log('Download URL obtained:', downloadURL);
+
+              // Create media record in Firestore
               const mediaData: Omit<MediaFile, 'id'> = {
-                fileName: sanitizedFileName,
+                fileName: uniqueFileName,
                 originalName: fileName,
                 mimeType,
                 category,
-                size: blob.size,
+                fileSize: blob.size,
                 downloadURL,
                 storagePath,
-                userId: user.uid,
-                partnerId: userProfile.partnerId,
+                uploadedBy: currentUser.uid,
+                uploadedAt: serverTimestamp() as Timestamp,
                 caption,
-                tags: [],
                 isFavorite: false,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
+                isShared: false,
+                metadata: {
+                  userAgent: 'VaultLove Mobile App',
+                  platform: 'React Native'
+                }
               };
 
+              console.log('Creating Firestore record...');
               const docRef = await addDoc(collection(db, 'media'), mediaData);
-              const mediaFile: MediaFile = { id: docRef.id, ...mediaData };
+              console.log('Firestore record created:', docRef.id);
 
-              // Log analytics event with category
+              const createdMedia: MediaFile = {
+                id: docRef.id,
+                ...mediaData,
+                uploadedAt: Timestamp.now() // Use current timestamp for consistency
+              };
+
+              // Log analytics
               if (analytics) {
-                logEvent(analytics, 'media_uploaded', { 
-                  file_type: mimeType.split('/')[0],
-                  category: category
+                logEvent(analytics, 'file_uploaded', {
+                  file_type: category,
+                  file_size: blob.size,
+                  user_id: currentUser.uid
                 });
               }
 
-              resolve(mediaFile);
-            } catch (error) {
-              reject(error);
+              resolve(createdMedia);
+            } catch (firestoreError) {
+              console.error('Firestore creation error:', firestoreError);
+              reject(new Error(`Failed to save file record: ${firestoreError}`));
             }
           }
         );
@@ -180,58 +204,82 @@ class StorageService {
     }
   }
 
-  // Bulk upload with progress tracking
   async uploadMultipleFiles(
-    files: { uri: string; name: string; type: string; caption?: string }[],
+    files: Array<{ uri: string; name: string; type: string; caption?: string }>,
     onProgress?: (progress: BulkUploadProgress) => void
   ): Promise<MediaFile[]> {
-    const results: MediaFile[] = [];
-    const progressData: BulkUploadProgress = {
-      totalFiles: files.length,
-      completedFiles: 0,
-      overallProgress: 0,
-      files: files.map(file => ({
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated to upload files');
+      }
+
+      console.log('Starting bulk upload for', files.length, 'files');
+
+      const totalFiles = files.length;
+      let completedFiles = 0;
+      const results: MediaFile[] = [];
+      const fileProgresses: BulkUploadProgress['files'] = files.map(file => ({
         fileName: file.name,
         progress: 0,
-        isCompleted: false,
-      })),
-    };
+        isCompleted: false
+      }));
 
-    onProgress?.(progressData);
+      // Initialize progress
+      const updateProgress = () => {
+        const overallProgress = fileProgresses.reduce((sum, file) => sum + file.progress, 0) / totalFiles;
+        onProgress?.({
+          totalFiles,
+          completedFiles,
+          overallProgress,
+          files: [...fileProgresses]
+        });
+      };
 
-    try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        progressData.currentFile = file.name;
-        onProgress?.(progressData);
-
+      // Upload files concurrently with limited concurrency
+      const uploadPromises = files.map(async (file, index) => {
         try {
           const result = await this.uploadFile(
             file.uri,
             file.name,
             file.type,
             file.caption,
-            (fileProgress) => {
-              progressData.files[i].progress = fileProgress;
-              progressData.overallProgress = 
-                (progressData.completedFiles / progressData.totalFiles) * 100 +
-                (fileProgress / progressData.totalFiles);
-              onProgress?.(progressData);
+            (progress) => {
+              fileProgresses[index].progress = progress;
+              updateProgress();
             }
           );
 
+          fileProgresses[index].isCompleted = true;
+          completedFiles++;
           results.push(result);
-          progressData.files[i].isCompleted = true;
-          progressData.files[i].downloadURL = result.downloadURL;
-          progressData.completedFiles++;
-          progressData.overallProgress = (progressData.completedFiles / progressData.totalFiles) * 100;
-          onProgress?.(progressData);
+          updateProgress();
 
+          return result;
         } catch (error) {
-          console.error(`Failed to upload ${file.name}:`, error);
-          progressData.files[i].error = error instanceof Error ? error.message : 'Upload failed';
-          onProgress?.(progressData);
+          console.error(`Upload failed for ${file.name}:`, error);
+          fileProgresses[index].error = error instanceof Error ? error.message : 'Upload failed';
+          fileProgresses[index].isCompleted = true;
+          completedFiles++;
+          updateProgress();
+          
+          return null;
         }
+      });
+
+      // Wait for all uploads to complete
+      await Promise.allSettled(uploadPromises);
+
+      console.log('Bulk upload completed. Successful uploads:', results.length);
+
+      // Log analytics
+      if (analytics) {
+        logEvent(analytics, 'bulk_upload_completed', {
+          total_files: totalFiles,
+          successful_uploads: results.length,
+          failed_uploads: totalFiles - results.length,
+          user_id: currentUser.uid
+        });
       }
 
       return results;
@@ -241,91 +289,28 @@ class StorageService {
     }
   }
 
-  // Cancel upload
-  cancelUpload(fileName: string): boolean {
-    const uploadTask = this.uploadTasks.get(fileName);
-    if (uploadTask) {
-      uploadTask.cancel();
-      this.uploadTasks.delete(fileName);
-      return true;
-    }
-    return false;
-  }
-
-  // Get user media with real-time updates
-  subscribeToUserMedia(callback: (media: MediaFile[]) => void) {
-    const user = authService.getCurrentUser();
-    
-    if (!user) {
-      console.log('No authenticated user for media subscription');
-      callback([]);
-      return () => {};
-    }
-
-    const userProfile = authService.getUserProfile();
-    
-    // Immediately call callback with empty array to stop loading state
-    callback([]);
-    
-    // Query for user's media and partner's media (if connected)
-    const userIds = [user.uid];
-    if (userProfile?.partnerId) {
-      userIds.push(userProfile.partnerId);
-    }
-
-    try {
-      const q = query(
-        collection(db, 'media'),
-        where('userId', 'in', userIds),
-        orderBy('createdAt', 'desc')
-      );
-
-      const unsubscribe = onSnapshot(
-        q, 
-        (snapshot) => {
-          const media: MediaFile[] = [];
-          snapshot.forEach((doc) => {
-            media.push({ id: doc.id, ...doc.data() } as MediaFile);
-          });
-          callback(media);
-        },
-        (error) => {
-          console.error('Media subscription error:', error);
-          // Still call callback with empty array on error to prevent infinite loading
-          callback([]);
-        }
-      );
-
-      this.mediaListeners.push(callback);
-      return unsubscribe;
-    } catch (error) {
-      console.error('Media subscription setup error:', error);
-      callback([]);
-      return () => {};
-    }
-  }
-
-  // Delete media file
+  // File Management Methods
   async deleteMedia(mediaId: string): Promise<void> {
-    const user = authService.getCurrentUser();
-    if (!user) throw new Error('No authenticated user');
-
     try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated');
+      }
+
+      console.log('Deleting media:', mediaId);
+
       // Get media document
-      const mediaDoc = await getDocs(
-        query(collection(db, 'media'), where('id', '==', mediaId))
-      );
+      const mediaDoc = await getDocs(query(
+        collection(db, 'media'),
+        where('__name__', '==', mediaId),
+        where('uploadedBy', '==', currentUser.uid)
+      ));
 
       if (mediaDoc.empty) {
-        throw new Error('Media not found');
+        throw new Error('Media not found or you do not have permission to delete it');
       }
 
       const mediaData = mediaDoc.docs[0].data() as MediaFile;
-      
-      // Check if user owns this media
-      if (mediaData.userId !== user.uid) {
-        throw new Error('Unauthorized to delete this media');
-      }
 
       // Delete from storage
       const storageRef = ref(storage, mediaData.storagePath);
@@ -334,10 +319,13 @@ class StorageService {
       // Delete from Firestore
       await deleteDoc(doc(db, 'media', mediaId));
 
-      // Log analytics event
+      console.log('Media deleted successfully');
+
+      // Log analytics
       if (analytics) {
-        logEvent(analytics, 'media_deleted', { 
-          file_type: mediaData.mimeType.split('/')[0] 
+        logEvent(analytics, 'file_deleted', {
+          file_type: mediaData.category,
+          user_id: currentUser.uid
         });
       }
     } catch (error) {
@@ -346,81 +334,187 @@ class StorageService {
     }
   }
 
-  // Update media metadata
-  async updateMedia(mediaId: string, updates: Partial<Pick<MediaFile, 'caption' | 'tags' | 'isFavorite'>>): Promise<void> {
-    const user = authService.getCurrentUser();
-    if (!user) throw new Error('No authenticated user');
-
-    try {
-      await updateDoc(doc(db, 'media', mediaId), {
-        ...updates,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (error) {
-      console.error('Update media error:', error);
-      throw error;
-    }
-  }
-
-  // Toggle favorite status
   async toggleFavorite(mediaId: string): Promise<void> {
     try {
-      const mediaDoc = await getDocs(
-        query(collection(db, 'media'), where('id', '==', mediaId))
-      );
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated');
+      }
+
+      const mediaRef = doc(db, 'media', mediaId);
+      const mediaDoc = await getDocs(query(
+        collection(db, 'media'),
+        where('__name__', '==', mediaId),
+        where('uploadedBy', '==', currentUser.uid)
+      ));
 
       if (mediaDoc.empty) {
         throw new Error('Media not found');
       }
 
-      const mediaData = mediaDoc.docs[0].data() as MediaFile;
-      await this.updateMedia(mediaId, { isFavorite: !mediaData.isFavorite });
+      const currentData = mediaDoc.docs[0].data() as MediaFile;
+      await updateDoc(mediaRef, {
+        isFavorite: !currentData.isFavorite,
+        updatedAt: serverTimestamp()
+      });
+
+      console.log('Favorite status toggled for media:', mediaId);
     } catch (error) {
       console.error('Toggle favorite error:', error);
       throw error;
     }
   }
 
-  // Get storage usage statistics
-  async getStorageStats(): Promise<{ totalSize: number; fileCount: number; mediaByType: Record<string, number> }> {
-    const user = authService.getCurrentUser();
-    if (!user) throw new Error('No authenticated user');
+  // Media Subscription
+  subscribeToUserMedia(callback: (media: MediaFile[]) => void): () => void {
+    const currentUser = authService.getCurrentUser();
+    if (!currentUser) {
+      console.warn('No authenticated user for media subscription');
+      callback([]);
+      return () => {};
+    }
 
+    console.log('Setting up media subscription for user:', currentUser.uid);
+
+    const q = query(
+      collection(db, 'media'),
+      where('uploadedBy', '==', currentUser.uid),
+      orderBy('uploadedAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        try {
+          const media: MediaFile[] = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          } as MediaFile));
+
+          console.log('Media subscription update:', media.length, 'files');
+          callback(media);
+        } catch (error) {
+          console.error('Media subscription error:', error);
+          callback([]);
+        }
+      },
+      (error) => {
+        console.error('Media subscription listener error:', error);
+        callback([]);
+      }
+    );
+
+    return unsubscribe;
+  }
+
+  // Utility Methods
+  private async uriToBlob(uri: string): Promise<Blob> {
     try {
+      console.log('Converting URI to blob:', uri);
+      
+      // For React Native, we need to handle file URIs differently
+      const response = await fetch(uri);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
+      }
+      
+      const blob = await response.blob();
+      console.log('Blob conversion successful, size:', blob.size);
+      
+      return blob;
+    } catch (error) {
+      console.error('URI to blob conversion error:', error);
+      throw new Error(`Failed to process file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private determineFileCategory(mimeType: string): 'photo' | 'video' | 'document' | 'audio' {
+    if (mimeType.startsWith('image/')) return 'photo';
+    if (mimeType.startsWith('video/')) return 'video';
+    if (mimeType.startsWith('audio/')) return 'audio';
+    return 'document';
+  }
+
+  // Public getters
+  getCurrentUserMediaCount(): Promise<number> {
+    return new Promise((resolve) => {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        resolve(0);
+        return;
+      }
+
       const q = query(
         collection(db, 'media'),
-        where('userId', '==', user.uid)
+        where('uploadedBy', '==', currentUser.uid)
+      );
+
+      getDocs(q)
+        .then(snapshot => resolve(snapshot.size))
+        .catch(() => resolve(0));
+    });
+  }
+
+  async getStorageStats(): Promise<{
+    totalSize: number;
+    fileCount: number;
+    mediaByType: Record<string, number>;
+  }> {
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        return {
+          totalSize: 0,
+          fileCount: 0,
+          mediaByType: {}
+        };
+      }
+
+      console.log('Loading storage stats for user:', currentUser.uid);
+
+      const q = query(
+        collection(db, 'media'),
+        where('uploadedBy', '==', currentUser.uid)
       );
 
       const snapshot = await getDocs(q);
       let totalSize = 0;
-      const mediaByType: Record<string, number> = {};
+      const mediaByType: Record<string, number> = {
+        photo: 0,
+        video: 0,
+        document: 0,
+        audio: 0
+      };
 
-      snapshot.forEach((doc) => {
-        const media = doc.data() as MediaFile;
-        totalSize += media.size;
-        
-        const type = media.mimeType.split('/')[0];
-        mediaByType[type] = (mediaByType[type] || 0) + 1;
+      snapshot.docs.forEach(doc => {
+        const data = doc.data() as MediaFile;
+        totalSize += data.fileSize || 0;
+        mediaByType[data.category] = (mediaByType[data.category] || 0) + 1;
       });
 
-      return {
+      const stats = {
         totalSize,
         fileCount: snapshot.size,
-        mediaByType,
+        mediaByType
       };
+
+      console.log('Storage stats loaded:', stats);
+      return stats;
     } catch (error) {
       console.error('Get storage stats error:', error);
-      throw error;
+      return {
+        totalSize: 0,
+        fileCount: 0,
+        mediaByType: {}
+      };
     }
   }
 
-  // Clean up listeners
+  // Cleanup
   cleanup() {
-    this.mediaListeners.length = 0;
-    this.uploadTasks.clear();
+    this.mediaListeners = [];
   }
 }
 
-export const storageService = new StorageService();
-export default storageService; 
+export default new StorageService(); 

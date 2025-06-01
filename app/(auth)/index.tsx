@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -24,7 +24,7 @@ import {
   EyeOff,
   ArrowRight,
 } from 'lucide-react-native';
-import authService from '../../services/auth';
+import authService, { UserProfile } from '../../services/auth';
 import { auth } from '../../config/firebase';
 
 // Only import recaptcha for mobile platforms
@@ -53,6 +53,19 @@ export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const recaptchaVerifier = useRef<any>(null);
   const router = useRouter();
+
+  // Listen for auth state changes to handle automatic redirection
+  useEffect(() => {
+    const unsubscribe = authService.onAuthStateChange((user) => {
+      if (user) {
+        console.log('✅ User authenticated, redirecting to main app...');
+        // Use replace to prevent going back to login
+        router.replace('/(tabs)');
+      }
+    });
+
+    return unsubscribe;
+  }, [router]);
 
   const formatPhoneNumber = (number: string) => {
     // Remove all non-digits
@@ -100,29 +113,24 @@ export default function LoginScreen() {
     }
 
     const formattedNumber = formatPhoneNumber(phoneNumber);
-    
+
     try {
       setIsLoading(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-      if (!recaptchaVerifier.current) {
-        throw new Error('reCAPTCHA verifier not initialized');
+      console.log('📱 Sending OTP to:', formattedNumber);
+      const success = await authService.sendPhoneVerification(formattedNumber);
+      
+      if (success) {
+        setOtpSent(true);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+        Alert.alert(
+          'OTP Sent! 📱',
+          `Verification code sent to ${formattedNumber}. Please check your messages.`,
+          [{ text: 'OK' }]
+        );
       }
-
-      const confirmationResult = await authService.signInWithPhone(
-        formattedNumber, 
-        recaptchaVerifier.current
-      );
-      
-      setVerificationId(confirmationResult.verificationId);
-      setOtpSent(true);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      
-      Alert.alert(
-        'OTP Sent! 📱', 
-        `Verification code sent to ${formattedNumber}. Please check your messages.`,
-        [{ text: 'OK' }]
-      );
     } catch (error: any) {
       console.error('Send OTP error:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -158,14 +166,29 @@ export default function LoginScreen() {
     try {
       setIsLoading(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      console.log('🔐 Verifying OTP...');
+      const userProfile = await authService.verifyPhoneNumber(otp);
       
-      await authService.verifyPhoneCode(verificationId, otp);
+      console.log('✅ Phone login successful:', {
+        uid: userProfile.uid,
+        displayName: userProfile.displayName,
+        phoneNumber: userProfile.phoneNumber,
+        email: userProfile.email,
+        partnerStatus: userProfile.partnerStatus
+      });
+      
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       
-      // Force navigation after successful login
-      setTimeout(() => {
-        router.replace('/(tabs)');
-      }, 500);
+      // Show success message
+      Alert.alert(
+        'Welcome! 🎉',
+        `Welcome ${userProfile.displayName || 'to VaultLove'}! You have successfully signed in.`,
+        [{ text: 'Continue' }]
+      );
+
+      // The auth state listener will handle redirection automatically
+      
     } catch (error: any) {
       console.error('Verify OTP error:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -205,13 +228,28 @@ export default function LoginScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      await authService.signIn(email, password);
+      console.log('📧 Email login attempt for:', email);
+      const userProfile = await authService.signIn(email, password);
+      
+      console.log('✅ Email login successful:', {
+        uid: userProfile.uid,
+        displayName: userProfile.displayName,
+        email: userProfile.email,
+        phoneNumber: userProfile.phoneNumber,
+        partnerStatus: userProfile.partnerStatus
+      });
+      
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       
-      // Force navigation after successful login
-      setTimeout(() => {
-        router.replace('/(tabs)');
-      }, 500);
+      // Show success message
+      Alert.alert(
+        'Welcome Back! 🎉',
+        `Welcome back ${userProfile.displayName || 'to VaultLove'}! You have successfully signed in.`,
+        [{ text: 'Continue' }]
+      );
+
+      // The auth state listener will handle redirection automatically
+      
     } catch (error: any) {
       console.error('Login error:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -456,6 +494,22 @@ export default function LoginScreen() {
                 ref={recaptchaVerifier}
                 firebaseConfig={auth.app.options}
                 attemptInvisibleVerification={true}
+              />
+            )}
+
+            {/* Hidden reCAPTCHA container for web */}
+            {Platform.OS === 'web' && (
+              <div 
+                id="recaptcha-container" 
+                style={{ 
+                  position: 'absolute', 
+                  top: -1000, 
+                  left: -1000, 
+                  width: 1, 
+                  height: 1,
+                  opacity: 0,
+                  pointerEvents: 'none'
+                }} 
               />
             )}
           </ScrollView>

@@ -238,11 +238,11 @@ export default function SignupScreen() {
           );
         }
       } else {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         
-        Alert.alert(
-          'Welcome to VaultLove! 💖',
-          'Your account has been created successfully. You can now start building your precious memories vault.',
+      Alert.alert(
+        'Welcome to VaultLove! 💖',
+        'Your account has been created successfully. You can now start building your precious memories vault.',
           [{ 
             text: 'Get Started', 
             onPress: () => {
@@ -308,11 +308,11 @@ export default function SignupScreen() {
   const renderProgressBar = () => (
     <View style={styles.progressContainer}>
       <View style={styles.progressTrack}>
-        <View 
+        <View
           style={[
             styles.progressFill, 
             { width: `${(currentStep / 3) * 100}%` }
-          ]} 
+          ]}
         />
       </View>
       <Text style={styles.progressText}>Step {currentStep} of 3</Text>
@@ -325,7 +325,7 @@ export default function SignupScreen() {
         <View style={styles.stepIconContainer}>
           <User color="#ec4899" size={28} />
         </View>
-        <Text style={styles.stepTitle}>Let's get to know you</Text>
+      <Text style={styles.stepTitle}>Let's get to know you</Text>
         <Text style={styles.stepSubtitle}>Tell us your basic information to get started</Text>
       </View>
 
@@ -333,31 +333,31 @@ export default function SignupScreen() {
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <User color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.textInput}
-              placeholder="Your full name"
+          <TextInput
+            style={styles.input}
+              placeholder="Full Name"
               placeholderTextColor="#9ca3af"
-              value={formData.name}
-              onChangeText={(value) => updateFormData('name', value)}
-              autoCapitalize="words"
-              autoCorrect={false}
-            />
+            value={formData.name}
+            onChangeText={(value) => updateFormData('name', value)}
+            autoCapitalize="words"
+            autoCorrect={false}
+          />
           </View>
         </View>
 
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Mail color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.textInput}
-              placeholder="Email address"
+          <TextInput
+            style={styles.input}
+              placeholder="Email Address"
               placeholderTextColor="#9ca3af"
-              value={formData.email}
-              onChangeText={(value) => updateFormData('email', value)}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
+            value={formData.email}
+            onChangeText={(value) => updateFormData('email', value)}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
             {emailValidation.isChecking && (
               <ActivityIndicator color="#9ca3af" size="small" style={styles.validationIcon} />
             )}
@@ -388,8 +388,8 @@ export default function SignupScreen() {
               <Text style={styles.phonePrefixText}>🇮🇳 +91</Text>
             </View>
             <TextInput
-              style={styles.phoneInput}
-              placeholder="Enter your phone number"
+              style={styles.input}
+              placeholder="Enter your 10-digit mobile number"
               placeholderTextColor="#9ca3af"
               value={formData.phoneNumber}
               onChangeText={(text) => updateFormData('phoneNumber', formatPhoneInput(text))}
@@ -478,8 +478,8 @@ export default function SignupScreen() {
           <View style={styles.inputWrapper}>
             <UserPlus color="#9ca3af" size={20} style={styles.inputIcon} />
             <TextInput
-              style={styles.textInput}
-              placeholder="Enter partner code (e.g. JOHN-1234)"
+              style={styles.input}
+              placeholder="Partner Code (Optional)"
               placeholderTextColor="#9ca3af"
               value={formData.partnerCode}
               onChangeText={(value) => updateFormData('partnerCode', value.toUpperCase())}
@@ -499,59 +499,59 @@ export default function SignupScreen() {
           <Lock color="#ec4899" size={28} />
         </View>
         <Text style={styles.stepTitle}>Secure your account</Text>
-        <Text style={styles.stepSubtitle}>Create a strong password to protect your memories</Text>
+      <Text style={styles.stepSubtitle}>Create a strong password to protect your memories</Text>
       </View>
 
       <View style={styles.form}>
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Lock color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.textInput}
-              placeholder="Create password"
+          <TextInput
+            style={styles.input}
+              placeholder="Create a strong password"
               placeholderTextColor="#9ca3af"
-              value={formData.password}
-              onChangeText={(value) => updateFormData('password', value)}
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity
+            value={formData.password}
+            onChangeText={(value) => updateFormData('password', value)}
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity
               onPress={() => setShowPassword(!showPassword)}
-              style={styles.eyeIcon}
-            >
-              {showPassword ? (
+            style={styles.eyeIcon}
+          >
+            {showPassword ? (
                 <EyeOff color="#9ca3af" size={20} />
-              ) : (
+            ) : (
                 <Eye color="#9ca3af" size={20} />
-              )}
-            </TouchableOpacity>
+            )}
+          </TouchableOpacity>
           </View>
         </View>
 
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Lock color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.textInput}
-              placeholder="Confirm password"
+          <TextInput
+            style={styles.input}
+            placeholder="Confirm password"
               placeholderTextColor="#9ca3af"
-              value={formData.confirmPassword}
-              onChangeText={(value) => updateFormData('confirmPassword', value)}
-              secureTextEntry={!showConfirmPassword}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity
+            value={formData.confirmPassword}
+            onChangeText={(value) => updateFormData('confirmPassword', value)}
+            secureTextEntry={!showConfirmPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity
               onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-              style={styles.eyeIcon}
-            >
-              {showConfirmPassword ? (
+            style={styles.eyeIcon}
+          >
+            {showConfirmPassword ? (
                 <EyeOff color="#9ca3af" size={20} />
-              ) : (
+            ) : (
                 <Eye color="#9ca3af" size={20} />
-              )}
-            </TouchableOpacity>
+            )}
+          </TouchableOpacity>
           </View>
         </View>
 
@@ -593,9 +593,9 @@ export default function SignupScreen() {
 
             {/* Step Content */}
             <View style={styles.content}>
-              {currentStep === 1 && renderStep1()}
-              {currentStep === 2 && renderStep2()}
-              {currentStep === 3 && renderStep3()}
+            {currentStep === 1 && renderStep1()}
+            {currentStep === 2 && renderStep2()}
+            {currentStep === 3 && renderStep3()}
             </View>
 
             {/* Navigation Buttons */}
@@ -754,7 +754,7 @@ const styles = StyleSheet.create({
   inputIcon: {
     marginRight: 12,
   },
-  textInput: {
+  input: {
     flex: 1,
     fontSize: 16,
     color: '#1f2937',
@@ -879,12 +879,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#374151',
     fontWeight: '500',
-  },
-  phoneInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#1f2937',
-    height: '100%',
   },
   validationIcon: {
     marginLeft: 8,

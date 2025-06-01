@@ -204,7 +204,7 @@ export default function SettingsScreen() {
             try {
               setIsLoading(true);
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              await authService.signOut();
+              await authService.signOutUser();
             } catch (error) {
               console.error('Logout error:', error);
               Alert.alert('Error', 'Failed to logout. Please try again.');
@@ -234,6 +234,15 @@ export default function SettingsScreen() {
         }
       ]
     );
+  };
+
+  const formatStorageDisplay = (stats: { totalSize: number; fileCount: number } | null): string => {
+    if (!stats) return 'Loading...';
+    const totalAvailable = 5 * 1024 * 1024 * 1024; // 5GB limit
+    const used = formatFileSize(stats.totalSize);
+    const total = formatFileSize(totalAvailable);
+    const percentage = Math.round((stats.totalSize / totalAvailable) * 100);
+    return `${used} / ${total} (${percentage}% used)`;
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -307,123 +316,12 @@ export default function SettingsScreen() {
     </TouchableOpacity>
   );
 
+  // Show loading if no user profile
   if (!userProfile) {
     return (
-      <View style={styles.container}>
-        <SafeAreaView style={styles.safeArea}>
-          <View style={styles.header}>
-            <Heart color="#ec4899" size={24} />
-            <Text style={styles.title}>Settings</Text>
-            <Text style={styles.subtitle}>Customize your VaultLove experience</Text>
-          </View>
-          
-          <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>👤 Account</Text>
-              
-              <SettingItem
-                icon={<UserCircle color="#ec4899" size={24} />}
-                title="Your Name"
-                value="Loading..."
-                description="Loading user information..."
-              />
-
-              <SettingItem
-                icon={<XCircle color="#6b7280" size={20} />}
-                title="Partner Connection"
-                value="Loading..."
-                description="Checking connection status..."
-              />
-            </View>
-            
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>🔒 Security</Text>
-              
-              {isBiometricsAvailable && (
-                <SettingItem
-                  icon={<Fingerprint color="#ec4899" size={24} />}
-                  title="Biometric Authentication"
-                  description="Unlock VaultLove using your fingerprint or Face ID"
-                  rightComponent={
-                  <Switch
-                    value={biometricsEnabled}
-                    onValueChange={handleBiometricsToggle}
-                    trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
-                    thumbColor="#ffffff"
-                  />
-                  }
-                />
-              )}
-              
-              <SettingItem
-                icon={<Lock color="#ec4899" size={24} />}
-                title="Change Password"
-                description="Update your account password"
-                onPress={() => Alert.alert("Feature", "Password change coming soon!")}
-              />
-            </View>
-            
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>💝 Vault</Text>
-              
-              <SettingItem
-                icon={<Shield color="#ec4899" size={24} />}
-                title="Storage Usage"
-                value={storageStats ? formatFileSize(storageStats.totalSize) : 'Loading...'}
-                description={storageStats ? `${storageStats.fileCount} files stored` : 'Calculating...'}
-                onPress={loadStorageStats}
-              />
-              
-              <SettingItem
-                icon={<Bell color="#ec4899" size={24} />}
-                title="Memory Reminders"
-                description="Get notified about special moments"
-                rightComponent={
-                  <Switch
-                    value={notificationsEnabled}
-                    onValueChange={(value) => {
-                      setNotificationsEnabled(value);
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    }}
-                    trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
-                    thumbColor="#ffffff"
-                  />
-                }
-              />
-            </View>
-            
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>⚙️ App</Text>
-              
-              <SettingItem
-                icon={<Palette color="#ec4899" size={24} />}
-                title="Theme"
-                value="Light"
-                description="Customize your app appearance"
-                onPress={() => Alert.alert("Feature", "Theme options coming soon!")}
-              />
-              
-              <SettingItem
-                icon={<Info color="#ec4899" size={24} />}
-                title="About VaultLove"
-                description="Version 1.0.0 • Built with ❤️"
-                onPress={() => Alert.alert("VaultLove", "A secure vault for your precious memories.\n\nBuilt with React Native & Expo\nPowered by Firebase")}
-              />
-            </View>
-            
-            <View style={styles.footer}>
-              <Text style={styles.footerText}>
-                Made with 💖 for couples who cherish their memories
-              </Text>
-            </View>
-          </ScrollView>
-
-          {isLoading && (
-            <View style={styles.loadingOverlay}>
-              <ActivityIndicator size="large" color="#ec4899" />
-            </View>
-          )}
-        </SafeAreaView>
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#ec4899" />
+        <Text style={{ marginTop: 16, color: '#6b7280' }}>Loading settings...</Text>
       </View>
     );
   }
@@ -444,8 +342,8 @@ export default function SettingsScreen() {
             <SettingItem
               icon={<UserCircle color="#ec4899" size={24} />}
               title="Your Name"
-              value={userProfile.name}
-              description={userProfile.email}
+              value={userProfile?.displayName || 'Not set'}
+              description={userProfile?.email || 'No email'}
             />
 
             <SettingItem
@@ -453,13 +351,15 @@ export default function SettingsScreen() {
               title="Partner Connection"
               value={getPartnerStatusText()}
               description={
-                userProfile.partnerStatus === 'connected' 
+                userProfile?.partnerStatus === 'connected' 
                   ? 'Sharing vault with your partner'
-                  : userProfile.partnerStatus === 'pending'
-                  ? 'Waiting for partner to join'
+                  : userProfile?.partnerStatus === 'pending'
+                  ? 'Partner code active - waiting for connection'
                   : 'Connect with your partner to share memories'
               }
               onPress={() => {
+                if (!userProfile) return;
+                
                 if (userProfile.partnerStatus === 'connected') {
                   // Show disconnect option
                   Alert.alert(
@@ -529,7 +429,7 @@ export default function SettingsScreen() {
               description="Update your account password"
               onPress={() => Alert.alert("Feature", "Password change coming soon!")}
             />
-              </View>
+          </View>
           
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>💝 Vault</Text>
@@ -537,7 +437,7 @@ export default function SettingsScreen() {
             <SettingItem
               icon={<Shield color="#ec4899" size={24} />}
               title="Storage Usage"
-              value={storageStats ? formatFileSize(storageStats.totalSize) : 'Loading...'}
+              value={storageStats ? formatStorageDisplay(storageStats) : 'Loading...'}
               description={storageStats ? `${storageStats.fileCount} files stored` : 'Calculating...'}
               onPress={loadStorageStats}
             />
@@ -577,7 +477,7 @@ export default function SettingsScreen() {
               description="Version 1.0.0 • Built with ❤️"
               onPress={() => Alert.alert("VaultLove", "A secure vault for your precious memories.\n\nBuilt with React Native & Expo\nPowered by Firebase")}
             />
-              </View>
+          </View>
           
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>⚠️ Danger Zone</Text>
