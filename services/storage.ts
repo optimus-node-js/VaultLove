@@ -250,6 +250,7 @@ class StorageService {
         albumName: string;
         albumDescription?: string;
         isAlbum: boolean;
+        existingAlbumId?: string;
       };
     }>,
     onProgress?: (progress: BulkUploadProgress) => void
@@ -327,16 +328,24 @@ class StorageService {
       // Create album if this was an album upload
       if (isAlbumUpload && results.length > 0 && albumInfo) {
         try {
-          console.log('Creating album after successful uploads...');
-          const album = await this.createAlbum(
-            albumInfo.albumName,
-            albumInfo.albumDescription,
-            results
-          );
-          console.log('Album created successfully:', album.id);
+          if (albumInfo.existingAlbumId) {
+            // Add to existing album
+            console.log('Adding media to existing album:', albumInfo.existingAlbumId);
+            await this.addMediaToAlbum(albumInfo.existingAlbumId, results);
+            console.log('Media added to existing album successfully');
+          } else {
+            // Create new album
+            console.log('Creating new album after successful uploads...');
+            const album = await this.createAlbum(
+              albumInfo.albumName,
+              albumInfo.albumDescription,
+              results
+            );
+            console.log('New album created successfully:', album.id);
+          }
         } catch (albumError) {
-          console.error('Album creation failed:', albumError);
-          // Don't throw here - uploads were successful, just album creation failed
+          console.error('Album operation failed:', albumError);
+          // Don't throw here - uploads were successful, just album operation failed
         }
       }
 
@@ -790,6 +799,59 @@ class StorageService {
 
     } catch (error) {
       console.error('Delete album error:', error);
+      throw error;
+    }
+  }
+
+  async addMediaToAlbum(albumId: string, mediaFiles: MediaFile[]): Promise<void> {
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated');
+      }
+
+      console.log('Adding', mediaFiles.length, 'media files to album:', albumId);
+
+      // Get the album document to verify ownership
+      const albumQuery = query(
+        collection(db, 'albums'),
+        where('__name__', '==', albumId),
+        where('createdBy', '==', currentUser.uid)
+      );
+
+      const albumSnapshot = await getDocs(albumQuery);
+      if (albumSnapshot.empty) {
+        throw new Error('Album not found or you do not have permission to modify it');
+      }
+
+      const albumData = albumSnapshot.docs[0].data() as Album;
+      const mediaIds = mediaFiles.map(f => f.id);
+
+      // Update media files to reference this album
+      const updateMediaPromises = mediaFiles.map(mediaFile => 
+        updateDoc(doc(db, 'media', mediaFile.id), {
+          albumId: albumId,
+          updatedAt: serverTimestamp()
+        })
+      );
+
+      // Update album with new media IDs and updated count and cover
+      const updatedMediaIds = [...new Set([...albumData.mediaIds, ...mediaIds])]; // Remove duplicates
+      const newCoverImage = mediaFiles.find(f => f.category === 'photo')?.downloadURL || albumData.coverImageUrl;
+
+      const updateAlbumPromise = updateDoc(doc(db, 'albums', albumId), {
+        mediaIds: updatedMediaIds,
+        mediaCount: updatedMediaIds.length,
+        coverImageUrl: newCoverImage,
+        updatedAt: serverTimestamp()
+      });
+
+      // Execute all updates
+      await Promise.all([...updateMediaPromises, updateAlbumPromise]);
+
+      console.log('Successfully added media to album');
+    } catch (error) {
+      console.error('Add media to album error:', error);
       throw error;
     }
   }

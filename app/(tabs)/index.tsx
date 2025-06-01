@@ -81,6 +81,11 @@ export default function VaultScreen() {
   const [showAlbumList, setShowAlbumList] = useState(false);
   const [albums, setAlbums] = useState<Album[]>([]);
   
+  // Album selection for upload
+  const [showAlbumDropdown, setShowAlbumDropdown] = useState(false);
+  const [selectedExistingAlbum, setSelectedExistingAlbum] = useState<Album | null>(null);
+  const [albumSelectionMode, setAlbumSelectionMode] = useState<'new' | 'existing'>('new');
+  
   // Album detail view states
   const [showAlbumDetail, setShowAlbumDetail] = useState(false);
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
@@ -89,6 +94,10 @@ export default function VaultScreen() {
   // Delete confirmation modal state
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [mediaToDelete, setMediaToDelete] = useState<MediaFile | null>(null);
+  
+  // Album context tracking for full screen navigation
+  const [openedFromAlbum, setOpenedFromAlbum] = useState(false);
+  const [albumContextBeforeFullScreen, setAlbumContextBeforeFullScreen] = useState<Album | null>(null);
   
   const router = useRouter();
 
@@ -375,6 +384,10 @@ export default function VaultScreen() {
     setIsAlbumMode(false);
     setAlbumName('');
     setAlbumDescription('');
+    // Reset album selection states
+    setAlbumSelectionMode('new');
+    setSelectedExistingAlbum(null);
+    setShowAlbumDropdown(false);
   };
 
   const openPreview = (uri: string, type: string) => {
@@ -390,6 +403,18 @@ export default function VaultScreen() {
     if (selectedImages.length === 0) {
       console.log('❌ No images selected for upload');
       return;
+    }
+
+    // Validation for album mode
+    if (selectedImages.length > 1 && isAlbumMode) {
+      if (albumSelectionMode === 'new' && !albumName.trim()) {
+        Alert.alert('Album Name Required', 'Please enter a name for your new album.');
+        return;
+      }
+      if (albumSelectionMode === 'existing' && !selectedExistingAlbum) {
+        Alert.alert('Album Selection Required', 'Please select an existing album or create a new one.');
+        return;
+      }
     }
 
     console.log('🚀 Starting upload process...');
@@ -429,9 +454,14 @@ export default function VaultScreen() {
               ? caption.trim() || undefined 
               : undefined,
           albumInfo: selectedImages.length > 1 && isAlbumMode ? {
-            albumName: albumName.trim(),
+            albumName: albumSelectionMode === 'new' 
+              ? albumName.trim() 
+              : selectedExistingAlbum?.name || '',
             albumDescription: albumDescription.trim() || undefined,
-            isAlbum: true
+            isAlbum: true,
+            existingAlbumId: albumSelectionMode === 'existing' 
+              ? selectedExistingAlbum?.id 
+              : undefined,
           } : undefined,
         };
       });
@@ -765,23 +795,11 @@ export default function VaultScreen() {
   const deleteMediaFromAlbum = async (mediaId: string) => {
     console.log('🗑️ deleteMediaFromAlbum called for:', mediaId);
     
-    try {
-      const mediaItem = albumMedia.find(item => item.id === mediaId);
-      if (!mediaItem) {
-        console.error('Media item not found in album');
-        return;
-      }
-      
-      console.log('🗑️ Found media item, type:', mediaItem.category);
-      console.log('🗑️ Opening delete confirmation modal');
-      
-      // Set the media to delete and show confirmation modal
+    const mediaItem = albumMedia.find(item => item.id === mediaId);
+    if (mediaItem) {
+      console.log('🗑️ Found media item, opening delete confirmation modal');
       setMediaToDelete(mediaItem);
       setShowDeleteConfirmation(true);
-      
-    } catch (error) {
-      console.error('❌ Error in deleteMediaFromAlbum:', error);
-      Alert.alert('Error', 'Failed to delete media. Please try again.');
     }
   };
 
@@ -789,12 +807,19 @@ export default function VaultScreen() {
     if (!mediaToDelete) return;
     
     console.log('🗑️ Confirming delete for:', mediaToDelete.id);
+    console.log('🗑️ openedFromAlbum:', openedFromAlbum);
     
     try {
       await storageService.deleteMedia(mediaToDelete.id);
       
-      // Remove from album media immediately for real-time UI update
-      setAlbumMedia(prev => prev.filter(media => media.id !== mediaToDelete.id));
+      // Update albumMedia if we're in album detail view or if we'll return to album
+      if (showAlbumDetail && albumMedia.length > 0) {
+        setAlbumMedia(prev => prev.filter(media => media.id !== mediaToDelete.id));
+      } else if (openedFromAlbum && albumContextBeforeFullScreen) {
+        // We'll be returning to album, so we need to update the album media
+        // This will be refreshed anyway in closeFullScreen, but update it here too
+        setAlbumMedia(prev => prev.filter(media => media.id !== mediaToDelete.id));
+      }
       
       // Close full screen if deleting the currently viewed media
       if (selectedMedia?.id === mediaToDelete.id) {
@@ -849,8 +874,21 @@ export default function VaultScreen() {
   const openFullScreen = (media: MediaFile) => {
     console.log('🎯 openFullScreen called for:', media.id);
     console.log('🎯 Current showFullScreen state:', showFullScreen);
+    console.log('🎯 Current showAlbumDetail state:', showAlbumDetail);
     
-    // Use setTimeout to ensure state updates properly
+    // If we're opening from album detail view, save the album context and close modal quickly
+    if (showAlbumDetail && selectedAlbum) {
+      console.log('🎯 Saving album context for return navigation:', selectedAlbum.name);
+      setOpenedFromAlbum(true);
+      setAlbumContextBeforeFullScreen(selectedAlbum);
+      setShowAlbumDetail(false); // Must close album modal for full screen to work
+    } else {
+      // Clear album context if opening from memories view
+      setOpenedFromAlbum(false);
+      setAlbumContextBeforeFullScreen(null);
+    }
+    
+    // Use minimal timeout to ensure modal closes before opening full screen
     setTimeout(() => {
       setSelectedMedia(media);
       setCaptionText(media.caption || '');
@@ -858,14 +896,47 @@ export default function VaultScreen() {
       
       console.log('🎯 Set showFullScreen to true');
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    }, 100);
+    }, showAlbumDetail ? 50 : 0); // Minimal delay just for album context
   };
 
   const closeFullScreen = () => {
+    console.log('🎯 closeFullScreen called');
+    console.log('🎯 openedFromAlbum:', openedFromAlbum);
+    console.log('🎯 albumContextBeforeFullScreen:', albumContextBeforeFullScreen?.name);
+    
     setShowFullScreen(false);
     setSelectedMedia(null);
     setEditingCaption(false);
     setCaptionText('');
+    
+    // If we opened from album context, restore the album view quickly
+    if (openedFromAlbum && albumContextBeforeFullScreen) {
+      console.log('🎯 Restoring album context:', albumContextBeforeFullScreen.name);
+      
+      // Use minimal timeout to ensure full screen modal closes first
+      setTimeout(async () => {
+        try {
+          // Refresh the album media to ensure it's up to date
+          const refreshedMedia = await storageService.getAlbumMedia(albumContextBeforeFullScreen.id);
+          setAlbumMedia(refreshedMedia);
+          
+          // Restore album context
+          setSelectedAlbum(albumContextBeforeFullScreen);
+          setShowAlbumDetail(true);
+          
+          console.log('🎯 Album context restored successfully');
+        } catch (error) {
+          console.error('Failed to restore album context:', error);
+          // If restore fails, just clear the context
+          setOpenedFromAlbum(false);
+          setAlbumContextBeforeFullScreen(null);
+        }
+      }, 100); // Minimal delay for modal transition
+    }
+    
+    // Clear album context flags
+    setOpenedFromAlbum(false);
+    setAlbumContextBeforeFullScreen(null);
   };
 
   const saveCaption = async () => {
@@ -1053,9 +1124,14 @@ export default function VaultScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           onPress={(e) => {
-            console.log('🗑️ Delete button pressed for:', item.id);
+            console.log('🗑️ Memories delete button pressed for:', item.id);
             e.stopPropagation();
-            deleteMedia(item.id);
+            // Use the same delete modal approach as albums
+            const mediaItem = media.find(m => m.id === item.id);
+            if (mediaItem) {
+              setMediaToDelete(mediaItem);
+              setShowDeleteConfirmation(true);
+            }
           }}
           style={styles.actionButton}
           activeOpacity={0.7}
@@ -1235,9 +1311,11 @@ export default function VaultScreen() {
                   <TouchableOpacity
                     style={styles.fullScreenActionButton}
                     onPress={() => {
-                      console.log('🗑️ Modal delete button pressed for:', selectedMedia?.id);
+                      console.log('🗑️ Full screen modal delete button pressed for:', selectedMedia?.id);
                       if (selectedMedia) {
-                        deleteMedia(selectedMedia.id);
+                        // Use the same custom modal approach
+                        setMediaToDelete(selectedMedia);
+                        setShowDeleteConfirmation(true);
                       }
                     }}
                     activeOpacity={0.7}
@@ -1299,6 +1377,39 @@ export default function VaultScreen() {
                 )}
               </View>
             </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
+        {/* Delete Confirmation Modal - Moved to top level to avoid modal conflicts */}
+        <Modal
+          visible={showDeleteConfirmation}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={cancelDelete}
+        >
+          <View style={styles.deleteModalContainer}>
+            <View style={styles.deleteModalContent}>
+              <Text style={styles.deleteModalTitle}>Delete Memory</Text>
+              <Text style={styles.deleteModalMessage}>
+                Are you sure you want to permanently delete this {mediaToDelete?.category || 'item'}? This action cannot be undone.
+              </Text>
+              
+              <View style={styles.deleteModalButtons}>
+                <TouchableOpacity
+                  style={styles.deleteModalCancelButton}
+                  onPress={cancelDelete}
+                >
+                  <Text style={styles.deleteModalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={styles.deleteModalDeleteButton}
+                  onPress={confirmDelete}
+                >
+                  <Text style={styles.deleteModalDeleteText}>Delete</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </Modal>
 
@@ -1442,18 +1553,80 @@ export default function VaultScreen() {
                           )}
                           
                           {selectedImages.length > 1 && isAlbumMode && (
-                            <View style={styles.albumNameContainer}>
-                              <Text style={styles.inputLabel}>Album Name</Text>
-                              <TextInput
-                                style={styles.albumNameInput}
-                                placeholder="Enter album name..."
-                                placeholderTextColor="#9ca3af"
-                                value={albumName}
-                                onChangeText={setAlbumName}
-                                maxLength={50}
-                              />
-                              <Text style={styles.characterCount}>{albumName.length}/50</Text>
-                            </View>
+                            <>
+                              <View style={styles.albumSelectionContainer}>
+                                <Text style={styles.inputLabel}>Album Options</Text>
+                                <View style={styles.albumSelectionButtons}>
+                                  <TouchableOpacity
+                                    style={[
+                                      styles.albumSelectionButton,
+                                      albumSelectionMode === 'new' && styles.albumSelectionButtonActive
+                                    ]}
+                                    onPress={() => {
+                                      setAlbumSelectionMode('new');
+                                      setSelectedExistingAlbum(null);
+                                    }}
+                                  >
+                                    <Text style={[
+                                      styles.albumSelectionButtonText,
+                                      albumSelectionMode === 'new' && styles.albumSelectionButtonTextActive
+                                    ]}>Create New</Text>
+                                  </TouchableOpacity>
+                                  
+                                  {albums.length > 0 && (
+                                    <TouchableOpacity
+                                      style={[
+                                        styles.albumSelectionButton,
+                                        albumSelectionMode === 'existing' && styles.albumSelectionButtonActive
+                                      ]}
+                                      onPress={() => {
+                                        setAlbumSelectionMode('existing');
+                                        setShowAlbumDropdown(true);
+                                      }}
+                                    >
+                                      <Text style={[
+                                        styles.albumSelectionButtonText,
+                                        albumSelectionMode === 'existing' && styles.albumSelectionButtonTextActive
+                                      ]}>Add to Existing</Text>
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              </View>
+                              
+                              {albumSelectionMode === 'new' && (
+                                <View style={styles.albumNameContainer}>
+                                  <Text style={styles.inputLabel}>Album Name</Text>
+                                  <TextInput
+                                    style={styles.albumNameInput}
+                                    placeholder="Enter album name..."
+                                    placeholderTextColor="#9ca3af"
+                                    value={albumName}
+                                    onChangeText={setAlbumName}
+                                    maxLength={50}
+                                  />
+                                  <Text style={styles.characterCount}>{albumName.length}/50</Text>
+                                </View>
+                              )}
+                              
+                              {albumSelectionMode === 'existing' && selectedExistingAlbum && (
+                                <View style={styles.albumNameContainer}>
+                                  <Text style={styles.inputLabel}>Selected Album</Text>
+                                  <View style={styles.selectedAlbumDisplay}>
+                                    <Image source={{ uri: selectedExistingAlbum.coverImageUrl }} style={styles.selectedAlbumCover} />
+                                    <View style={styles.selectedAlbumInfo}>
+                                      <Text style={styles.selectedAlbumName}>{selectedExistingAlbum.name}</Text>
+                                      <Text style={styles.selectedAlbumCount}>{selectedExistingAlbum.mediaCount} memories</Text>
+                                    </View>
+                                    <TouchableOpacity
+                                      style={styles.changeAlbumButton}
+                                      onPress={() => setShowAlbumDropdown(true)}
+                                    >
+                                      <Text style={styles.changeAlbumButtonText}>Change</Text>
+                                    </TouchableOpacity>
+                                  </View>
+                                </View>
+                              )}
+                            </>
                           )}
                           
                           <View style={styles.captionContainer}>
@@ -1777,36 +1950,69 @@ export default function VaultScreen() {
           </View>
         </Modal>
         
-        {/* Delete Confirmation Modal */}
+        {/* Album Dropdown Modal */}
         <Modal
-          visible={showDeleteConfirmation}
+          visible={showAlbumDropdown}
           transparent={true}
-          animationType="fade"
-          onRequestClose={cancelDelete}
+          animationType="slide"
+          onRequestClose={() => setShowAlbumDropdown(false)}
         >
-          <View style={styles.deleteModalContainer}>
-            <View style={styles.deleteModalContent}>
-              <Text style={styles.deleteModalTitle}>Delete Memory</Text>
-              <Text style={styles.deleteModalMessage}>
-                Are you sure you want to permanently delete this {mediaToDelete?.category || 'item'}? This action cannot be undone.
-              </Text>
-              
-              <View style={styles.deleteModalButtons}>
+          <View style={styles.uploadModalContainer}>
+            <SafeAreaView style={styles.uploadModalSafeArea}>
+              <View style={styles.uploadModalHeader}>
                 <TouchableOpacity
-                  style={styles.deleteModalCancelButton}
-                  onPress={cancelDelete}
+                  style={styles.uploadModalCloseButton}
+                  onPress={() => setShowAlbumDropdown(false)}
                 >
-                  <Text style={styles.deleteModalCancelText}>Cancel</Text>
+                  <X color="#6b7280" size={24} />
                 </TouchableOpacity>
-                
-                <TouchableOpacity
-                  style={styles.deleteModalDeleteButton}
-                  onPress={confirmDelete}
-                >
-                  <Text style={styles.deleteModalDeleteText}>Delete</Text>
-                </TouchableOpacity>
+                <Text style={styles.uploadModalTitle}>Select Album</Text>
+                <View style={{ width: 24 }} />
               </View>
-            </View>
+
+              <ScrollView style={styles.albumListContainer}>
+                {albums.length === 0 ? (
+                  <View style={styles.emptyAlbumContainer}>
+                    <Text style={styles.emptyAlbumTitle}>No albums available</Text>
+                    <Text style={styles.emptyAlbumSubtitle}>
+                      You need to create an album first before you can add to existing ones.
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.albumGridContainer}>
+                    {albums.map((album, index) => (
+                      <TouchableOpacity 
+                        key={index} 
+                        style={[
+                          styles.albumItem,
+                          selectedExistingAlbum?.id === album.id && styles.albumItemSelected
+                        ]}
+                        onPress={() => {
+                          setSelectedExistingAlbum(album);
+                          // Preload the existing album's description for editing
+                          setAlbumDescription(album.description || '');
+                          setShowAlbumDropdown(false);
+                        }}
+                      >
+                        <Image 
+                          source={{ uri: album.coverImageUrl }} 
+                          style={styles.albumCover}
+                        />
+                        <View style={styles.albumInfo}>
+                          <Text style={styles.albumTitle}>{album.name}</Text>
+                          <Text style={styles.albumCount}>{album.mediaCount} memories</Text>
+                        </View>
+                        {selectedExistingAlbum?.id === album.id && (
+                          <View style={styles.selectedIndicator}>
+                            <Text style={styles.selectedIndicatorText}>✓</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </ScrollView>
+            </SafeAreaView>
           </View>
         </Modal>
         
@@ -2771,6 +2977,80 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   deleteModalDeleteText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  albumSelectionContainer: {
+    marginBottom: 32,
+  },
+  albumSelectionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  albumSelectionButton: {
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#f9fafb',
+    marginRight: 16,
+  },
+  albumSelectionButtonActive: {
+    backgroundColor: '#ec4899',
+  },
+  albumSelectionButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  albumSelectionButtonTextActive: {
+    color: '#ffffff',
+  },
+  selectedAlbumDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  selectedAlbumCover: {
+    width: 80,
+    height: 80,
+    borderRadius: 12,
+    marginRight: 16,
+  },
+  selectedAlbumInfo: {
+    flex: 1,
+  },
+  selectedAlbumName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  selectedAlbumCount: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  changeAlbumButton: {
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#ec4899',
+    marginTop: 16,
+  },
+  changeAlbumButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  albumItemSelected: {
+    backgroundColor: '#f3f4f6',
+  },
+  selectedIndicator: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    padding: 4,
+    backgroundColor: '#ec4899',
+    borderRadius: 12,
+  },
+  selectedIndicatorText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
