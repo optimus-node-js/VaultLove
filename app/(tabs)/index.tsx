@@ -743,7 +743,7 @@ export default function VaultScreen() {
     try {
       console.log('🔍 Opening album:', album.name);
       setSelectedAlbum(album);
-      setShowAlbumList(false);
+      // Transition from album list to album detail within the same modal
       setShowAlbumDetail(true);
       
       // Fetch media files for this album
@@ -758,9 +758,11 @@ export default function VaultScreen() {
   };
 
   const closeAlbumDetail = () => {
+    console.log('🔙 Closing album detail, returning to album list');
     setShowAlbumDetail(false);
     setSelectedAlbum(null);
     setAlbumMedia([]);
+    // showAlbumList should remain true to show the album list
   };
 
   const refreshAlbumMedia = async () => {
@@ -876,27 +878,26 @@ export default function VaultScreen() {
     console.log('🎯 Current showFullScreen state:', showFullScreen);
     console.log('🎯 Current showAlbumDetail state:', showAlbumDetail);
     
-    // If we're opening from album detail view, save the album context and close modal quickly
+    // Set the selected media and caption
+    setSelectedMedia(media);
+    setCaptionText(media.caption || '');
+    
     if (showAlbumDetail && selectedAlbum) {
-      console.log('🎯 Saving album context for return navigation:', selectedAlbum.name);
+      // If we're in album detail view, just switch to full screen mode within the same modal
+      console.log('🎯 Switching to full screen mode within album modal');
       setOpenedFromAlbum(true);
       setAlbumContextBeforeFullScreen(selectedAlbum);
-      setShowAlbumDetail(false); // Must close album modal for full screen to work
+      setShowFullScreen(true);
+      // Don't close album modal - we'll render full screen content inside it
     } else {
-      // Clear album context if opening from memories view
+      // We're in memories view, open the separate full screen modal
+      console.log('🎯 Opening full screen modal from memories');
       setOpenedFromAlbum(false);
       setAlbumContextBeforeFullScreen(null);
+      setShowFullScreen(true);
     }
     
-    // Use minimal timeout to ensure modal closes before opening full screen
-    setTimeout(() => {
-      setSelectedMedia(media);
-      setCaptionText(media.caption || '');
-      setShowFullScreen(true);
-      
-      console.log('🎯 Set showFullScreen to true');
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    }, showAlbumDetail ? 50 : 0); // Minimal delay just for album context
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
   const closeFullScreen = () => {
@@ -909,34 +910,28 @@ export default function VaultScreen() {
     setEditingCaption(false);
     setCaptionText('');
     
-    // If we opened from album context, restore the album view quickly
     if (openedFromAlbum && albumContextBeforeFullScreen) {
-      console.log('🎯 Restoring album context:', albumContextBeforeFullScreen.name);
-      
-      // Use minimal timeout to ensure full screen modal closes first
+      // We're returning to album view within the same modal - no modal transitions needed!
+      console.log('🎯 Returning to album view within same modal');
+      // The album modal is already open, just refresh the data
       setTimeout(async () => {
         try {
-          // Refresh the album media to ensure it's up to date
           const refreshedMedia = await storageService.getAlbumMedia(albumContextBeforeFullScreen.id);
           setAlbumMedia(refreshedMedia);
-          
-          // Restore album context
-          setSelectedAlbum(albumContextBeforeFullScreen);
-          setShowAlbumDetail(true);
-          
-          console.log('🎯 Album context restored successfully');
+          console.log('🎯 Album media refreshed - staying in album');
         } catch (error) {
-          console.error('Failed to restore album context:', error);
-          // If restore fails, just clear the context
-          setOpenedFromAlbum(false);
-          setAlbumContextBeforeFullScreen(null);
+          console.error('Failed to refresh album media:', error);
         }
-      }, 100); // Minimal delay for modal transition
+        
+        // Clear the context flags after refresh since we're back to album view
+        setOpenedFromAlbum(false);
+        setAlbumContextBeforeFullScreen(null);
+      }, 50);
+    } else {
+      // Clear album context flags immediately if not returning to album
+      setOpenedFromAlbum(false);
+      setAlbumContextBeforeFullScreen(null);
     }
-    
-    // Clear album context flags
-    setOpenedFromAlbum(false);
-    setAlbumContextBeforeFullScreen(null);
   };
 
   const saveCaption = async () => {
@@ -1772,180 +1767,289 @@ export default function VaultScreen() {
           </View>
         </Modal>
         
-        {/* Album List Modal */}
+        {/* Unified Albums Modal */}
         <Modal
-          visible={showAlbumList}
+          visible={showAlbumList || showAlbumDetail}
           transparent={true}
           animationType="slide"
-          onRequestClose={() => setShowAlbumList(false)}
+          onRequestClose={() => {
+            if (showAlbumDetail) {
+              closeAlbumDetail();
+            } else {
+              setShowAlbumList(false);
+            }
+          }}
         >
           <View style={styles.uploadModalContainer}>
             <SafeAreaView style={styles.uploadModalSafeArea}>
-              {/* Album List Header */}
-              <View style={styles.uploadModalHeader}>
-                <TouchableOpacity
-                  style={styles.uploadModalCloseButton}
-                  onPress={() => setShowAlbumList(false)}
-                >
-                  <X color="#6b7280" size={24} />
-                </TouchableOpacity>
-                <Text style={styles.uploadModalTitle}>Your Albums</Text>
-                <View style={{ width: 24 }} />
-              </View>
-
-              <ScrollView style={styles.albumListContainer}>
-                {albums.length === 0 ? (
-                  <View style={styles.emptyAlbumContainer}>
-                    <View style={styles.emptyAlbumIconContainer}>
-                      <Grid3X3 color="#d1d5db" size={64} />
-                    </View>
-                    <Text style={styles.emptyAlbumTitle}>No albums yet</Text>
-                    <Text style={styles.emptyAlbumSubtitle}>
-                      Upload multiple images and mark them as an album to create your first album
-                    </Text>
-                  </View>
-                ) : (
-                  <View style={styles.albumGridContainer}>
-                    {albums.map((album, index) => (
-                      <TouchableOpacity 
-                        key={index} 
-                        style={styles.albumItem}
-                        onPress={() => {
-                          openAlbumDetail(album);
-                        }}
-                      >
-                        <Image 
-                          source={{ uri: album.coverImageUrl }} 
-                          style={styles.albumCover}
-                        />
-                        <View style={styles.albumInfo}>
-                          <Text style={styles.albumTitle}>{album.name}</Text>
-                          <Text style={styles.albumCount}>{album.mediaCount} memories</Text>
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-              </ScrollView>
-            </SafeAreaView>
-          </View>
-        </Modal>
-        
-        {/* Album Detail Modal */}
-        <Modal
-          visible={showAlbumDetail}
-          transparent={true}
-          animationType="slide"
-          onRequestClose={closeAlbumDetail}
-        >
-          <View style={styles.uploadModalContainer}>
-            <SafeAreaView style={styles.uploadModalSafeArea}>
-              {/* Album Detail Header */}
-              <View style={styles.uploadModalHeader}>
-                <TouchableOpacity
-                  style={styles.uploadModalCloseButton}
-                  onPress={closeAlbumDetail}
-                >
-                  <X color="#6b7280" size={24} />
-                </TouchableOpacity>
-                <Text style={styles.uploadModalTitle}>
-                  {selectedAlbum?.createdAt 
-                    ? new Date(selectedAlbum.createdAt.toDate()).toLocaleDateString('en-US', {
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric'
-                      })
-                    : 'Album'
-                  }
-                </Text>
-                <View style={{ width: 24 }} />
-              </View>
-
-              <ScrollView style={styles.albumDetailContainer}>
-                {/* Album Info Section */}
-                {selectedAlbum && (
-                  <View style={styles.albumInfoSection}>
-                    <Text style={styles.albumDetailTitle}>{selectedAlbum.name}</Text>
-                    {selectedAlbum.description && (
-                      <Text style={styles.albumDetailDescription}>
-                        {selectedAlbum.description}
-                      </Text>
-                    )}
-                    <Text style={styles.albumDetailCount}>
-                      {albumMedia.length} {albumMedia.length === 1 ? 'memory' : 'memories'}
-                    </Text>
-                  </View>
-                )}
-
-                {/* Album Media Grid */}
-                {albumMedia.length > 0 ? (
-                  <View style={styles.albumMediaGrid}>
-                    {albumMedia.map((media, index) => (
-                      <View
-                        key={media.id}
-                        style={styles.albumMediaItem}
-                      >
-                        <TouchableOpacity
-                          style={styles.albumMediaImageContainer}
-                          onPress={() => {
-                            console.log('🖼️ Album image clicked:', media.id);
-                            openFullScreen(media);
-                          }}
-                          activeOpacity={0.8}
+              {showAlbumDetail ? (
+                // Album Detail View or Full Screen within Album
+                showFullScreen && openedFromAlbum ? (
+                  // Full Screen View within Album Modal
+                  <View style={styles.fullScreenContainer}>
+                    <KeyboardAvoidingView 
+                      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                      style={styles.fullScreenContent}
+                    >
+                      {/* Header with close button */}
+                      <View style={styles.fullScreenHeader}>
+                        <TouchableOpacity 
+                          style={styles.fullScreenCloseButton}
+                          onPress={closeFullScreen}
                         >
-                          <Image
-                            source={{ uri: media.thumbnailURL || media.downloadURL }}
-                            style={styles.albumMediaImage}
-                          />
-                          
-                          {/* Media type indicators */}
-                          {media.category === 'video' && (
-                            <View style={styles.videoOverlay}>
-                              <Play color="#ffffff" size={20} fill="#ffffff" />
-                            </View>
-                          )}
+                          <X color="#fff" size={24} />
                         </TouchableOpacity>
                         
-                        {/* Media actions */}
-                        <View style={styles.mediaActions}>
+                        {/* Actions */}
+                        <View style={styles.fullScreenActions}>
                           <TouchableOpacity
+                            style={styles.fullScreenActionButton}
                             onPress={() => {
-                              console.log('❤️ Heart clicked for:', media.id);
-                              toggleFavoriteInAlbum(media.id);
+                              console.log('❤️ Modal heart button pressed for:', selectedMedia?.id);
+                              if (selectedMedia) {
+                                toggleFavorite(selectedMedia.id);
+                              }
                             }}
-                            style={styles.actionButton}
                             activeOpacity={0.7}
                             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                           >
                             <Heart
-                              color={media.isFavorite ? "#ec4899" : "#ffffff"}
-                              size={14}
-                              fill={media.isFavorite ? "#ec4899" : "transparent"}
+                              color={selectedMedia?.isFavorite ? "#ec4899" : "#ffffff"}
+                              size={20}
+                              fill={selectedMedia?.isFavorite ? "#ec4899" : "transparent"}
                             />
                           </TouchableOpacity>
                           <TouchableOpacity
+                            style={styles.fullScreenActionButton}
                             onPress={() => {
-                              console.log('🗑️ Delete clicked for:', media.id);
-                              deleteMediaFromAlbum(media.id);
+                              console.log('🗑️ Full screen modal delete button pressed for:', selectedMedia?.id);
+                              if (selectedMedia) {
+                                setMediaToDelete(selectedMedia);
+                                setShowDeleteConfirmation(true);
+                              }
                             }}
-                            style={styles.actionButton}
                             activeOpacity={0.7}
                             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                           >
-                            <Trash2 color="#ffffff" size={14} />
+                            <Trash2 color="#ffffff" size={20} />
                           </TouchableOpacity>
                         </View>
                       </View>
-                    ))}
+
+                      {/* Media Content */}
+                      <View style={styles.fullScreenMediaContainer}>
+                        {selectedMedia && (
+                          <Image
+                            source={{ uri: selectedMedia.downloadURL }}
+                            style={styles.fullScreenImage}
+                            resizeMode="contain"
+                          />
+                        )}
+                      </View>
+
+                      {/* Caption Section */}
+                      <View style={styles.captionSection}>
+                        <View style={styles.captionHeader}>
+                          <Text style={styles.captionLabel}>Memory Note</Text>
+                          <TouchableOpacity
+                            style={styles.editCaptionButton}
+                            onPress={() => setEditingCaption(!editingCaption)}
+                          >
+                            <Text style={styles.editCaptionText}>
+                              {editingCaption ? 'Cancel' : 'Edit'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+
+                        {editingCaption ? (
+                          <View style={styles.captionEditContainer}>
+                            <TextInput
+                              style={styles.captionInput}
+                              value={captionText}
+                              onChangeText={setCaptionText}
+                              placeholder="Add a memory note..."
+                              placeholderTextColor="#9ca3af"
+                              multiline
+                              maxLength={200}
+                              autoFocus
+                            />
+                            <TouchableOpacity
+                              style={styles.saveCaptionButton}
+                              onPress={saveCaption}
+                            >
+                              <Text style={styles.saveCaptionText}>Save</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <Text style={styles.captionText}>
+                            {selectedMedia?.caption || 'No memory note added yet. Tap Edit to add one.'}
+                          </Text>
+                        )}
+                      </View>
+                    </KeyboardAvoidingView>
                   </View>
                 ) : (
-                  <View style={styles.emptyAlbumMedia}>
-                    <Text style={styles.emptyAlbumMediaText}>
-                      No media found in this album
-                    </Text>
+                  // Album Detail Grid View
+                  <>
+                    {/* Album Detail Header */}
+                    <View style={styles.uploadModalHeader}>
+                      <TouchableOpacity
+                        style={styles.uploadModalCloseButton}
+                        onPress={closeAlbumDetail}
+                      >
+                        <X color="#6b7280" size={24} />
+                      </TouchableOpacity>
+                      <Text style={styles.uploadModalTitle}>
+                        {selectedAlbum?.createdAt 
+                          ? new Date(selectedAlbum.createdAt.toDate()).toLocaleDateString('en-US', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric'
+                            })
+                          : 'Album'
+                        }
+                      </Text>
+                      <View style={{ width: 24 }} />
+                    </View>
+
+                    <ScrollView style={styles.albumDetailContainer}>
+                      {/* Album Info Section */}
+                      {selectedAlbum && (
+                        <View style={styles.albumInfoSection}>
+                          <Text style={styles.albumDetailTitle}>{selectedAlbum.name}</Text>
+                          {selectedAlbum.description && (
+                            <Text style={styles.albumDetailDescription}>
+                              {selectedAlbum.description}
+                            </Text>
+                          )}
+                          <Text style={styles.albumDetailCount}>
+                            {albumMedia.length} {albumMedia.length === 1 ? 'memory' : 'memories'}
+                          </Text>
+                        </View>
+                      )}
+
+                      {/* Album Media Grid */}
+                      {albumMedia.length > 0 ? (
+                        <View style={styles.albumMediaGrid}>
+                          {albumMedia.map((media, index) => (
+                            <View
+                              key={media.id}
+                              style={styles.albumMediaItem}
+                            >
+                              <TouchableOpacity
+                                style={styles.albumMediaImageContainer}
+                                onPress={() => {
+                                  console.log('🖼️ Album image clicked:', media.id);
+                                  openFullScreen(media);
+                                }}
+                                activeOpacity={0.8}
+                              >
+                                <Image
+                                  source={{ uri: media.thumbnailURL || media.downloadURL }}
+                                  style={styles.albumMediaImage}
+                                />
+                                
+                                {/* Media type indicators */}
+                                {media.category === 'video' && (
+                                  <View style={styles.videoOverlay}>
+                                    <Play color="#ffffff" size={20} fill="#ffffff" />
+                                  </View>
+                                )}
+                              </TouchableOpacity>
+                              
+                              {/* Media actions */}
+                              <View style={styles.mediaActions}>
+                                <TouchableOpacity
+                                  onPress={() => {
+                                    console.log('❤️ Heart clicked for:', media.id);
+                                    toggleFavoriteInAlbum(media.id);
+                                  }}
+                                  style={styles.actionButton}
+                                  activeOpacity={0.7}
+                                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                >
+                                  <Heart
+                                    color={media.isFavorite ? "#ec4899" : "#ffffff"}
+                                    size={14}
+                                    fill={media.isFavorite ? "#ec4899" : "transparent"}
+                                  />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  onPress={() => {
+                                    console.log('🗑️ Delete clicked for:', media.id);
+                                    deleteMediaFromAlbum(media.id);
+                                  }}
+                                  style={styles.actionButton}
+                                  activeOpacity={0.7}
+                                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                >
+                                  <Trash2 color="#ffffff" size={14} />
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      ) : (
+                        <View style={styles.emptyAlbumMedia}>
+                          <Text style={styles.emptyAlbumMediaText}>
+                            No media found in this album
+                          </Text>
+                        </View>
+                      )}
+                    </ScrollView>
+                  </>
+                )
+              ) : (
+                // Album List View
+                <>
+                  {/* Album List Header */}
+                  <View style={styles.uploadModalHeader}>
+                    <TouchableOpacity
+                      style={styles.uploadModalCloseButton}
+                      onPress={() => setShowAlbumList(false)}
+                    >
+                      <X color="#6b7280" size={24} />
+                    </TouchableOpacity>
+                    <Text style={styles.uploadModalTitle}>Your Albums</Text>
+                    <View style={{ width: 24 }} />
                   </View>
-                )}
-              </ScrollView>
+
+                  <ScrollView style={styles.albumListContainer}>
+                    {albums.length === 0 ? (
+                      <View style={styles.emptyAlbumContainer}>
+                        <View style={styles.emptyAlbumIconContainer}>
+                          <Grid3X3 color="#d1d5db" size={64} />
+                        </View>
+                        <Text style={styles.emptyAlbumTitle}>No albums yet</Text>
+                        <Text style={styles.emptyAlbumSubtitle}>
+                          Upload multiple images and mark them as an album to create your first album
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={styles.albumGridContainer}>
+                        {albums.map((album, index) => (
+                          <TouchableOpacity 
+                            key={index} 
+                            style={styles.albumItem}
+                            onPress={() => {
+                              openAlbumDetail(album);
+                            }}
+                          >
+                            <Image 
+                              source={{ uri: album.coverImageUrl }} 
+                              style={styles.albumCover}
+                            />
+                            <View style={styles.albumInfo}>
+                              <Text style={styles.albumTitle}>{album.name}</Text>
+                              <Text style={styles.albumCount}>{album.mediaCount} memories</Text>
+                            </View>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                  </ScrollView>
+                </>
+              )}
             </SafeAreaView>
           </View>
         </Modal>
