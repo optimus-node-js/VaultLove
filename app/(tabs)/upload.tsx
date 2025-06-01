@@ -141,12 +141,16 @@ export default function UploadScreen() {
   };
   
   const handleUpload = async () => {
-    if (selectedImages.length === 0) return;
+    if (selectedImages.length === 0) {
+      console.log('❌ No images selected for upload');
+      return;
+    }
 
     // Debug logging
-    console.log('Starting upload process...');
-    console.log('User profile:', userProfile);
-    console.log('Selected images:', selectedImages);
+    console.log('🚀 Starting upload process...');
+    console.log('📋 User profile:', userProfile);
+    console.log('📷 Selected images:', selectedImages.length, 'files');
+    console.log('📝 Caption:', caption);
 
     try {
       setIsUploading(true);
@@ -156,26 +160,36 @@ export default function UploadScreen() {
       const currentUser = authService.getCurrentUser();
       const currentProfile = authService.getUserProfile();
       
-      console.log('Current user:', currentUser?.uid);
-      console.log('Current profile:', currentProfile);
+      console.log('👤 Current user:', currentUser?.uid);
+      console.log('📱 Current profile:', currentProfile ? 'loaded' : 'not loaded');
       
       if (!currentUser) {
+        console.error('❌ No authenticated user found');
         Alert.alert("Authentication Error", "Please log in again to upload files.");
         return;
       }
+
+      console.log('✅ User authenticated, proceeding with upload...');
       
       // Add caption to all files
-      const filesWithCaptions = selectedImages.map(file => ({
-        ...file,
-        caption: caption.trim() || undefined,
-      }));
+      const filesWithCaptions = selectedImages.map((file, index) => {
+        console.log(`📁 File ${index + 1}:`, {
+          name: file.name,
+          type: file.type,
+          uri: file.uri.substring(0, 50) + '...'
+        });
+        return {
+          ...file,
+          caption: caption.trim() || undefined,
+        };
+      });
 
-      console.log('Files with captions:', filesWithCaptions);
+      console.log('📦 Files prepared for upload:', filesWithCaptions.length);
 
       if (selectedImages.length === 1) {
         // Single upload with real-time progress
         const fileName = filesWithCaptions[0].name;
-        console.log('Starting single file upload:', fileName);
+        console.log('📤 Starting single file upload:', fileName);
         
         setUploadProgress({
           totalFiles: 1,
@@ -189,13 +203,14 @@ export default function UploadScreen() {
           }],
         });
 
+        console.log('📡 Calling storageService.uploadFile...');
         const result = await storageService.uploadFile(
           filesWithCaptions[0].uri,
           filesWithCaptions[0].name,
           filesWithCaptions[0].type,
           filesWithCaptions[0].caption,
           (progress) => {
-            console.log('Upload progress:', progress);
+            console.log('📊 Upload progress callback:', progress);
             setUploadProgress(prev => prev ? {
               ...prev,
               overallProgress: progress,
@@ -208,7 +223,7 @@ export default function UploadScreen() {
           }
         );
 
-        console.log('Upload result:', result);
+        console.log('✅ Single upload result:', result ? 'success' : 'failed');
 
         // Final update
         setUploadProgress(prev => prev ? {
@@ -223,7 +238,7 @@ export default function UploadScreen() {
         } : null);
       } else {
         // Bulk upload with detailed progress tracking
-        console.log('Starting bulk upload for', selectedImages.length, 'files');
+        console.log('📤 Starting bulk upload for', selectedImages.length, 'files');
         
         const initialProgress: BulkUploadProgress = {
           totalFiles: selectedImages.length,
@@ -237,17 +252,19 @@ export default function UploadScreen() {
         };
         setUploadProgress(initialProgress);
 
+        console.log('📡 Calling storageService.uploadMultipleFiles...');
         const results = await storageService.uploadMultipleFiles(
           filesWithCaptions,
           (progress) => {
-            console.log('Bulk upload progress:', progress);
+            console.log('📊 Bulk upload progress callback:', progress);
             setUploadProgress(progress);
           }
         );
 
-        console.log('Bulk upload results:', results);
+        console.log('✅ Bulk upload results:', results.length, 'successful uploads');
       }
       
+      console.log('🎉 Upload process completed successfully!');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       
       // Show success with file count and categories
@@ -256,50 +273,77 @@ export default function UploadScreen() {
       
       let message = '';
       if (selectedImages.length === 1) {
-        message = 'Your memory has been securely saved to the vault.';
+        message = 'Your memory has been securely saved to the vault! 💖';
       } else {
         const parts = [];
         if (photoCount > 0) parts.push(`${photoCount} photo${photoCount > 1 ? 's' : ''}`);
         if (videoCount > 0) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
-        message = `All ${parts.join(' and ')} have been securely saved to the vault.`;
+        message = `Amazing! All ${parts.join(' and ')} have been securely saved to the vault! 💖`;
       }
 
+      // Clear selection and redirect automatically
+      clearSelection();
+      
+      // Show brief success toast and redirect
       Alert.alert(
-        "Success! 💖", 
+        "Upload Successful! 🎉", 
         message,
         [
           {
-            text: 'View Vault',
+            text: 'View in Gallery',
             onPress: () => {
-              clearSelection();
               router.push('/(tabs)');
-            }
-          },
-          {
-            text: 'Upload More',
-            onPress: clearSelection
+            },
+            style: 'default'
           }
-        ]
+        ],
+        { 
+          cancelable: false,
+          onDismiss: () => {
+            // Auto-redirect after 2 seconds if user doesn't tap
+            setTimeout(() => {
+              router.push('/(tabs)');
+            }, 2000);
+          }
+        }
       );
+
+      // Also auto-redirect after 3 seconds regardless
+      setTimeout(() => {
+        router.push('/(tabs)');
+      }, 3000);
     } catch (error) {
-      console.error('Upload failed:', error);
+      console.error('❌ Upload failed with error:', error);
+      
+      // Log more details about the error
+      if (error instanceof Error) {
+        console.error('❌ Error name:', error.name);
+        console.error('❌ Error message:', error.message);
+        console.error('❌ Error stack:', error.stack);
+      }
+      
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       
       // More detailed error handling
       let errorMessage = "Please try again later.";
       if (error instanceof Error) {
-        console.log('Error message:', error.message);
-        if (error.message.includes('No authenticated user')) {
+        console.log('🔍 Analyzing error message:', error.message);
+        if (error.message.includes('No authenticated user') || error.message.includes('User must be authenticated')) {
           errorMessage = "Please log in again to upload files.";
-        } else if (error.message.includes('network')) {
-          errorMessage = "Network error. Please check your connection.";
-        } else if (error.message.includes('quota')) {
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          errorMessage = "Network error. Please check your connection and try again.";
+        } else if (error.message.includes('quota') || error.message.includes('storage')) {
           errorMessage = "Storage quota exceeded. Please free up space.";
+        } else if (error.message.includes('Invalid file URI') || error.message.includes('Failed to process file')) {
+          errorMessage = "There was an issue with the selected file. Please try selecting a different file.";
+        } else if (error.message.includes('permission') || error.message.includes('unauthorized')) {
+          errorMessage = "Permission denied. Please check your account settings.";
         }
       }
       
-      Alert.alert("Upload Failed", errorMessage);
+      Alert.alert("Upload Failed", `${errorMessage}\n\nError details: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
+      console.log('🏁 Upload process finished, cleaning up...');
       setIsUploading(false);
       setUploadProgress(null);
     }

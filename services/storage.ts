@@ -95,11 +95,22 @@ class StorageService {
         throw new Error('User must be authenticated to upload files');
       }
 
-      console.log('Starting upload:', { fileName, mimeType, fileUri });
+      console.log('📤 Starting upload:', { fileName, mimeType, fileUri, userUid: currentUser.uid });
 
       // Validate file URI
-      if (!fileUri || !fileUri.startsWith('file://') && !fileUri.startsWith('content://')) {
-        throw new Error('Invalid file URI provided');
+      if (!fileUri) {
+        throw new Error('File URI is required');
+      }
+
+      // For web, allow blob: URIs as well
+      const isValidUri = fileUri.startsWith('file://') || 
+                        fileUri.startsWith('content://') || 
+                        fileUri.startsWith('blob:') ||
+                        fileUri.startsWith('data:');
+      
+      if (!isValidUri) {
+        console.error('Invalid file URI:', fileUri);
+        throw new Error(`Invalid file URI format: ${fileUri.substring(0, 50)}...`);
       }
 
       // Create unique file name to avoid conflicts
@@ -111,16 +122,24 @@ class StorageService {
       const category = this.determineFileCategory(mimeType);
       const storagePath = `uploads/${currentUser.uid}/${category}/${uniqueFileName}`;
       
-      console.log('Upload path:', storagePath);
+      console.log('📁 Upload path:', storagePath);
+      console.log('📋 File category:', category);
 
       // Create storage reference
       const storageRef = ref(storage, storagePath);
+      console.log('📦 Storage reference created');
 
       // Convert file URI to blob for upload
+      console.log('🔄 Converting URI to blob...');
       const blob = await this.uriToBlob(fileUri);
-      console.log('Blob created, size:', blob.size);
+      console.log('✅ Blob created, size:', blob.size, 'bytes');
+
+      if (blob.size === 0) {
+        throw new Error('File appears to be empty');
+      }
 
       // Create upload task with progress monitoring
+      console.log('🚀 Starting upload task...');
       const uploadTask = uploadBytesResumable(storageRef, blob, {
         contentType: mimeType,
         customMetadata: {
@@ -137,19 +156,21 @@ class StorageService {
           'state_changed',
           (snapshot) => {
             const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            console.log(`Upload progress: ${progress}%`);
+            console.log(`📊 Upload progress: ${Math.round(progress)}% (${snapshot.bytesTransferred}/${snapshot.totalBytes} bytes)`);
             onProgress?.(progress);
           },
           (error) => {
-            console.error('Upload error:', error);
+            console.error('❌ Upload error:', error);
+            console.error('Error code:', error.code);
+            console.error('Error message:', error.message);
             reject(new Error(`Upload failed: ${error.message}`));
           },
           async () => {
             try {
               // Upload completed successfully
-              console.log('Upload completed, getting download URL...');
+              console.log('✅ Upload completed, getting download URL...');
               const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-              console.log('Download URL obtained:', downloadURL);
+              console.log('🔗 Download URL obtained:', downloadURL);
 
               // Create media record in Firestore
               const mediaData: Omit<MediaFile, 'id'> = {
@@ -171,9 +192,9 @@ class StorageService {
                 }
               };
 
-              console.log('Creating Firestore record...');
+              console.log('📝 Creating Firestore record...');
               const docRef = await addDoc(collection(db, 'media'), mediaData);
-              console.log('Firestore record created:', docRef.id);
+              console.log('✅ Firestore record created:', docRef.id);
 
               const createdMedia: MediaFile = {
                 id: docRef.id,
@@ -190,16 +211,17 @@ class StorageService {
                 });
               }
 
+              console.log('🎉 Upload completed successfully!');
               resolve(createdMedia);
             } catch (firestoreError) {
-              console.error('Firestore creation error:', firestoreError);
+              console.error('❌ Firestore creation error:', firestoreError);
               reject(new Error(`Failed to save file record: ${firestoreError}`));
             }
           }
         );
       });
     } catch (error) {
-      console.error('Upload file error:', error);
+      console.error('❌ Upload file error:', error);
       throw error;
     }
   }
@@ -365,6 +387,38 @@ class StorageService {
     }
   }
 
+  async updateMediaCaption(mediaId: string, caption: string): Promise<void> {
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated');
+      }
+
+      console.log('Updating caption for media:', mediaId);
+
+      const mediaRef = doc(db, 'media', mediaId);
+      const mediaDoc = await getDocs(query(
+        collection(db, 'media'),
+        where('__name__', '==', mediaId),
+        where('uploadedBy', '==', currentUser.uid)
+      ));
+
+      if (mediaDoc.empty) {
+        throw new Error('Media not found or you do not have permission to edit it');
+      }
+
+      await updateDoc(mediaRef, {
+        caption: caption || null,
+        updatedAt: serverTimestamp()
+      });
+
+      console.log('Caption updated successfully for media:', mediaId);
+    } catch (error) {
+      console.error('Update caption error:', error);
+      throw error;
+    }
+  }
+
   // Media Subscription
   subscribeToUserMedia(callback: (media: MediaFile[]) => void): () => void {
     const currentUser = authService.getCurrentUser();
@@ -410,21 +464,41 @@ class StorageService {
   // Utility Methods
   private async uriToBlob(uri: string): Promise<Blob> {
     try {
-      console.log('Converting URI to blob:', uri);
+      console.log('🔄 Converting URI to blob:', uri.substring(0, 100) + '...');
       
-      // For React Native, we need to handle file URIs differently
+      // Handle different URI formats
+      if (uri.startsWith('data:')) {
+        console.log('📄 Processing data URI...');
+        // Handle data URIs
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        console.log('✅ Data URI converted to blob, size:', blob.size);
+        return blob;
+      }
+      
+      // For React Native and web, we need to handle file URIs differently
+      console.log('🌐 Processing file/content URI...');
       const response = await fetch(uri);
       
       if (!response.ok) {
+        console.error('❌ Fetch failed:', response.status, response.statusText);
         throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
       }
       
+      console.log('✅ Fetch successful, response status:', response.status);
+      console.log('📦 Response headers:', Object.fromEntries(response.headers.entries()));
+      
       const blob = await response.blob();
-      console.log('Blob conversion successful, size:', blob.size);
+      console.log('✅ Blob conversion successful, size:', blob.size, 'type:', blob.type);
+      
+      if (blob.size === 0) {
+        throw new Error('Received empty blob from URI');
+      }
       
       return blob;
     } catch (error) {
-      console.error('URI to blob conversion error:', error);
+      console.error('❌ URI to blob conversion error:', error);
+      console.error('❌ Failed URI:', uri.substring(0, 100) + '...');
       throw new Error(`Failed to process file: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }

@@ -20,11 +20,22 @@ service cloud.firestore {
     
     // Media collection - users can read/write their own media and their partner's media
     match /media/{mediaId} {
-      allow read, write: if request.auth != null && 
-        (request.auth.uid == resource.data.userId || 
+      // Allow reading media if user uploaded it or is partner
+      allow read: if request.auth != null && 
+        (request.auth.uid == resource.data.uploadedBy || 
          request.auth.uid == resource.data.partnerId);
+      
+      // Allow creating media if user is authenticated and setting themselves as uploader
       allow create: if request.auth != null && 
-        request.auth.uid == request.resource.data.userId;
+        request.auth.uid == request.resource.data.uploadedBy;
+      
+      // Allow updating media if user uploaded it
+      allow update: if request.auth != null && 
+        request.auth.uid == resource.data.uploadedBy;
+      
+      // Allow deleting media if user uploaded it
+      allow delete: if request.auth != null && 
+        request.auth.uid == resource.data.uploadedBy;
     }
   }
 } 

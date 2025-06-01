@@ -13,6 +13,9 @@ import {
   Platform,
   StatusBar,
   ScrollView,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,6 +35,7 @@ import {
   Plus,
   Grid3X3,
   Filter,
+  X,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 
@@ -49,13 +53,16 @@ const itemSize = (width - 48 - 16) / 2; // 2 columns with padding and gap
 
 export default function VaultScreen() {
   const [media, setMedia] = useState<MediaFile[]>([]);
+  const [filteredMedia, setFilteredMedia] = useState<MediaFile[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'photos' | 'videos' | 'documents' | 'audio'>('all');
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedFilter, setSelectedFilter] = useState<'all' | 'photo' | 'video' | 'document' | 'audio' | 'favorites'>('all');
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [showFullScreen, setShowFullScreen] = useState(false);
+  const [selectedMedia, setSelectedMedia] = useState<MediaFile | null>(null);
+  const [editingCaption, setEditingCaption] = useState(false);
+  const [captionText, setCaptionText] = useState('');
   const router = useRouter();
 
   useEffect(() => {
@@ -91,6 +98,28 @@ export default function VaultScreen() {
       unsubscribeMedia();
     };
   }, []);
+
+  useEffect(() => {
+    // Filter media based on selected filter
+    const filtered = media.filter(item => {
+      if (selectedFilter === 'photo') return item.category === 'photo';
+      if (selectedFilter === 'video') return item.category === 'video';
+      if (selectedFilter === 'document') return item.category === 'document';
+      if (selectedFilter === 'audio') return item.category === 'audio';
+      if (selectedFilter === 'favorites') return item.isFavorite;
+      return true;
+    });
+    setFilteredMedia(filtered);
+
+    // Update selectedMedia if it exists to reflect real-time changes
+    if (selectedMedia) {
+      const updatedSelectedMedia = media.find(item => item.id === selectedMedia.id);
+      if (updatedSelectedMedia) {
+        setSelectedMedia(updatedSelectedMedia);
+        setCaptionText(updatedSelectedMedia.caption || '');
+      }
+    }
+  }, [media, selectedFilter, selectedMedia?.id]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
@@ -219,12 +248,16 @@ export default function VaultScreen() {
   };
 
   const showUploadOptions = () => {
+    console.log('🔵 showUploadOptions called');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     
     const options = ['Take Photo', 'Choose from Gallery', 'Go to Upload Page', 'Cancel'];
     const cancelButtonIndex = 3;
 
+    console.log('🔵 Platform:', Platform.OS, 'ActionSheetIOS available:', !!ActionSheetIOS);
+
     if (Platform.OS === 'ios' && ActionSheetIOS) {
+      console.log('🔵 Using iOS ActionSheet');
       ActionSheetIOS.showActionSheetWithOptions(
         {
           options,
@@ -232,6 +265,7 @@ export default function VaultScreen() {
           title: 'Add a Memory',
         },
         (buttonIndex: number) => {
+          console.log('🔵 ActionSheet button pressed:', buttonIndex);
           if (buttonIndex === 0) {
               takePhoto();
           } else if (buttonIndex === 1) {
@@ -242,13 +276,14 @@ export default function VaultScreen() {
         }
       );
     } else {
+      console.log('🔵 Using Alert dialog');
       Alert.alert(
         'Add a Memory',
         'Choose how you want to add your memory',
         [
-          { text: 'Take Photo', onPress: takePhoto },
-          { text: 'Choose from Gallery', onPress: pickMultipleImages },
-          { text: 'Go to Upload Page', onPress: () => router.push('/(tabs)/upload') },
+          { text: 'Take Photo', onPress: () => { console.log('🔵 Take Photo pressed'); takePhoto(); } },
+          { text: 'Choose from Gallery', onPress: () => { console.log('🔵 Choose from Gallery pressed'); pickMultipleImages(); } },
+          { text: 'Go to Upload Page', onPress: () => { console.log('🔵 Go to Upload Page pressed'); router.push('/(tabs)/upload'); } },
           { text: 'Cancel', style: 'cancel' },
         ]
       );
@@ -256,8 +291,9 @@ export default function VaultScreen() {
   };
 
   const quickUploadToVault = () => {
+    console.log('🔴 Plus button clicked - quickUploadToVault called');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    router.push('/(tabs)/upload');
+    showUploadOptions();
   };
 
   const toggleFavorite = async (mediaId: string) => {
@@ -270,22 +306,65 @@ export default function VaultScreen() {
     }
   };
 
+  const openFullScreen = (media: MediaFile) => {
+    setSelectedMedia(media);
+    setCaptionText(media.caption || '');
+    setShowFullScreen(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  };
+
+  const closeFullScreen = () => {
+    setShowFullScreen(false);
+    setSelectedMedia(null);
+    setEditingCaption(false);
+    setCaptionText('');
+  };
+
+  const saveCaption = async () => {
+    if (!selectedMedia) return;
+    
+    try {
+      // Update caption in storage service (we'll need to add this method)
+      await storageService.updateMediaCaption(selectedMedia.id, captionText.trim());
+      setEditingCaption(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert('Success', 'Caption updated successfully!');
+    } catch (error) {
+      console.error('Update caption error:', error);
+      Alert.alert('Error', 'Failed to update caption');
+    }
+  };
+
   const deleteMedia = async (mediaId: string) => {
+    const mediaItem = media.find(item => item.id === mediaId);
+    const mediaType = mediaItem?.category || 'item';
+    
     Alert.alert(
       'Delete Memory',
-      'Are you sure you want to delete this memory? This action cannot be undone.',
+      `Are you sure you want to permanently delete this ${mediaType}? This action cannot be undone.`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
             try {
               await storageService.deleteMedia(mediaId);
+              
+              // Close modal if deleting the currently viewed media
+              if (selectedMedia?.id === mediaId) {
+                closeFullScreen();
+              }
+              
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert('Deleted', `${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} deleted successfully`);
             } catch (error) {
               console.error('Delete error:', error);
-              Alert.alert('Error', 'Failed to delete memory');
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+              Alert.alert('Error', 'Failed to delete media');
             }
           },
         },
@@ -293,46 +372,43 @@ export default function VaultScreen() {
     );
   };
 
-  const filteredMedia = media.filter(item => {
-    if (filter === 'photos') return item.category === 'photo';
-    if (filter === 'videos') return item.category === 'video';
-    if (filter === 'documents') return item.category === 'document';
-    if (filter === 'audio') return item.category === 'audio';
-    return true;
-  });
-
   const renderFilterBar = () => (
-    <View style={styles.filterContainer}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterContainer}>
       {[
         { key: 'all', label: 'All' },
-        { key: 'photos', label: 'Photos' },
-        { key: 'videos', label: 'Videos' },
-        { key: 'documents', label: 'Docs' },
+        { key: 'photo', label: 'Photos' },
+        { key: 'video', label: 'Videos' },
+        { key: 'document', label: 'Docs' },
         { key: 'audio', label: 'Audio' },
+        { key: 'favorites', label: 'Favorites' },
       ].map((item) => (
         <TouchableOpacity
           key={item.key}
           style={[
             styles.filterButton,
-            filter === item.key && styles.filterButtonActive,
+            selectedFilter === item.key && styles.filterButtonActive,
           ]}
-          onPress={() => setFilter(item.key as any)}
+          onPress={() => setSelectedFilter(item.key as any)}
         >
           <Text
             style={[
               styles.filterText,
-              filter === item.key && styles.filterTextActive,
+              selectedFilter === item.key && styles.filterTextActive,
             ]}
           >
             {item.label}
           </Text>
         </TouchableOpacity>
       ))}
-    </View>
+    </ScrollView>
   );
 
   const renderMediaItem = ({ item }: { item: MediaFile }) => (
-    <TouchableOpacity style={styles.mediaItem}>
+    <TouchableOpacity 
+      style={styles.mediaItem}
+      onPress={() => openFullScreen(item)}
+      activeOpacity={0.8}
+    >
       <Image source={{ uri: item.thumbnailURL || item.downloadURL }} style={styles.mediaImage} />
         
       {/* Media type indicators */}
@@ -354,17 +430,13 @@ export default function VaultScreen() {
           </View>
         )}
         
-      {/* Favorite Heart */}
-      {item.isFavorite && (
-        <View style={styles.favoriteOverlay}>
-          <Heart color="#ec4899" size={16} fill="#ec4899" />
-          </View>
-        )}
-        
       {/* Actions */}
           <View style={styles.mediaActions}>
             <TouchableOpacity
-          onPress={() => toggleFavorite(item.id)}
+          onPress={(e) => {
+            e.stopPropagation();
+            toggleFavorite(item.id);
+          }}
               style={styles.actionButton}
             >
           <Heart
@@ -374,7 +446,10 @@ export default function VaultScreen() {
               />
             </TouchableOpacity>
             <TouchableOpacity
-          onPress={() => deleteMedia(item.id)}
+          onPress={(e) => {
+            e.stopPropagation();
+            deleteMedia(item.id);
+          }}
               style={styles.actionButton}
             >
           <Trash2 color="#ffffff" size={16} />
@@ -403,24 +478,69 @@ export default function VaultScreen() {
     </View>
   );
 
-  const renderEmptyState = () => (
-    <View style={styles.emptyContainer}>
-      <View style={styles.emptyIconContainer}>
-        <ImageIcon color="#d1d5db" size={64} />
+  const renderEmptyState = () => {
+    // Only show empty state if user has no media at all, or filter-specific messages
+    const totalMediaCount = media.length;
+    
+    let title = "No memories yet";
+    let subtitle = "Start building your vault of precious memories with your partner";
+    let showEmptyState = true;
+
+    if (totalMediaCount === 0) {
+      // User has no media at all
+      title = "No memories yet";
+      subtitle = "Start building your vault of precious memories with your partner";
+    } else {
+      // User has media, but none match the current filter
+      showEmptyState = true;
+      switch (selectedFilter) {
+        case 'photo':
+          title = "No photos yet";
+          subtitle = "Upload your first photo to start your memory collection";
+          break;
+        case 'video':
+          title = "No videos yet";
+          subtitle = "Upload your first video to capture moving memories";
+          break;
+        case 'document':
+          title = "No documents yet";
+          subtitle = "Upload documents to keep important files safe";
+          break;
+        case 'audio':
+          title = "No audio files yet";
+          subtitle = "Upload audio files to preserve special sounds and messages";
+          break;
+        case 'favorites':
+          title = "No favorites yet";
+          subtitle = "Tap the heart icon on any memory to add it to your favorites";
+          break;
+        default:
+          title = "No memories yet";
+          subtitle = "Start building your vault of precious memories with your partner";
+      }
+    }
+
+    if (!showEmptyState) return null;
+
+    return (
+      <View style={styles.emptyContainer}>
+        <View style={styles.emptyIconContainer}>
+          <ImageIcon color="#d1d5db" size={64} />
+        </View>
+        <Text style={styles.emptyTitle}>{title}</Text>
+        <Text style={styles.emptySubtitle}>{subtitle}</Text>
+        <TouchableOpacity
+          style={styles.emptyButton}
+          onPress={showUploadOptions}
+        >
+          <Plus color="#ffffff" size={20} />
+          <Text style={styles.emptyButtonText}>
+            {totalMediaCount === 0 ? "Add your first memory" : "Add memory"}
+          </Text>
+        </TouchableOpacity>
       </View>
-      <Text style={styles.emptyTitle}>No memories yet</Text>
-      <Text style={styles.emptySubtitle}>
-        Start building your vault of precious memories with your partner
-      </Text>
-      <TouchableOpacity
-        style={styles.emptyButton}
-        onPress={quickUploadToVault}
-      >
-        <Plus color="#ffffff" size={20} />
-        <Text style={styles.emptyButtonText}>Add your first memory</Text>
-      </TouchableOpacity>
-    </View>
-  );
+    );
+  };
   
   if (isInitialLoading && media.length === 0) {
   return (
@@ -440,6 +560,107 @@ export default function VaultScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <SafeAreaView style={styles.safeArea}>
+        {/* Full-Screen Media Viewer Modal */}
+        <Modal
+          visible={showFullScreen}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={closeFullScreen}
+        >
+          <View style={styles.fullScreenContainer}>
+            <TouchableOpacity 
+              style={styles.fullScreenOverlay} 
+              onPress={closeFullScreen}
+              activeOpacity={1}
+            />
+            <KeyboardAvoidingView 
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={styles.fullScreenContent}
+            >
+              {/* Header with close button */}
+              <View style={styles.fullScreenHeader}>
+                <TouchableOpacity 
+                  style={styles.fullScreenCloseButton}
+                  onPress={closeFullScreen}
+                >
+                  <X color="#fff" size={24} />
+                </TouchableOpacity>
+                
+                {/* Actions */}
+                <View style={styles.fullScreenActions}>
+                  <TouchableOpacity
+                    style={styles.fullScreenActionButton}
+                    onPress={() => selectedMedia && toggleFavorite(selectedMedia.id)}
+                  >
+                    <Heart
+                      color={selectedMedia?.isFavorite ? "#ec4899" : "#ffffff"}
+                      size={20}
+                      fill={selectedMedia?.isFavorite ? "#ec4899" : "transparent"}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.fullScreenActionButton}
+                    onPress={() => selectedMedia && deleteMedia(selectedMedia.id)}
+                  >
+                    <Trash2 color="#ffffff" size={20} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Media Content */}
+              <View style={styles.fullScreenMediaContainer}>
+                {selectedMedia && (
+                  <Image
+                    source={{ uri: selectedMedia.downloadURL }}
+                    style={styles.fullScreenImage}
+                    resizeMode="contain"
+                  />
+                )}
+              </View>
+
+              {/* Caption Section */}
+              <View style={styles.captionSection}>
+                <View style={styles.captionHeader}>
+                  <Text style={styles.captionLabel}>Memory Note</Text>
+                  <TouchableOpacity
+                    style={styles.editCaptionButton}
+                    onPress={() => setEditingCaption(!editingCaption)}
+                  >
+                    <Text style={styles.editCaptionText}>
+                      {editingCaption ? 'Cancel' : 'Edit'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {editingCaption ? (
+                  <View style={styles.captionEditContainer}>
+                    <TextInput
+                      style={styles.captionInput}
+                      value={captionText}
+                      onChangeText={setCaptionText}
+                      placeholder="Add a memory note..."
+                      placeholderTextColor="#9ca3af"
+                      multiline
+                      maxLength={200}
+                      autoFocus
+                    />
+                    <TouchableOpacity
+                      style={styles.saveCaptionButton}
+                      onPress={saveCaption}
+                    >
+                      <Text style={styles.saveCaptionText}>Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <Text style={styles.captionText}>
+                    {selectedMedia?.caption || 'No memory note added yet. Tap Edit to add one.'}
+                  </Text>
+                )}
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+
         {isLoading && (
           <View style={styles.uploadLoadingOverlay}>
             <View style={styles.uploadLoadingContainer}>
@@ -543,7 +764,7 @@ const styles = StyleSheet.create({
   },
   filterContainer: {
     flexDirection: 'row',
-    gap: 12,
+    paddingHorizontal: 4,
   },
   filterButton: {
     paddingHorizontal: 16,
@@ -552,6 +773,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9fafb',
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    marginHorizontal: 6,
   },
   filterButtonActive: {
     backgroundColor: '#ec4899',
@@ -711,5 +933,112 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     color: '#ffffff',
+  },
+  fullScreenContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+  },
+  fullScreenOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+  },
+  fullScreenContent: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  fullScreenHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  },
+  fullScreenCloseButton: {
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 20,
+  },
+  fullScreenActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  fullScreenActionButton: {
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 20,
+  },
+  fullScreenMediaContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  fullScreenImage: {
+    width: width,
+    height: '100%',
+    resizeMode: 'contain',
+  },
+  captionSection: {
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    padding: 20,
+    minHeight: 120,
+  },
+  captionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  captionLabel: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  editCaptionButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 8,
+  },
+  editCaptionText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#ffffff',
+  },
+  captionEditContainer: {
+    gap: 12,
+  },
+  captionInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    color: '#1f2937',
+    fontSize: 16,
+    padding: 12,
+    borderRadius: 8,
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  saveCaptionButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#ec4899',
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  saveCaptionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  captionText: {
+    fontSize: 16,
+    color: '#e5e7eb',
+    lineHeight: 22,
   },
 });

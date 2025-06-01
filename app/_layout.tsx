@@ -24,6 +24,7 @@ export default function RootLayout() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthStateKnown, setIsAuthStateKnown] = useState(false);
+  const [initialAuthCheckComplete, setInitialAuthCheckComplete] = useState(false);
   const router = useRouter();
   const segments = useSegments();
 
@@ -38,7 +39,14 @@ export default function RootLayout() {
         });
 
         // Check for stored user data first
-        await checkStoredAuthData();
+        const hasStoredAuth = await checkStoredAuthData();
+        
+        // If we have stored auth data, mark auth state as known immediately
+        if (hasStoredAuth) {
+          setIsAuthStateKnown(true);
+          setInitialAuthCheckComplete(true);
+          console.log('✅ Auth state restored from storage');
+        }
 
         // Set up Firebase auth listener
         const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -92,6 +100,7 @@ export default function RootLayout() {
           
           // Mark auth state as known after first auth state change
           setIsAuthStateKnown(true);
+          setInitialAuthCheckComplete(true);
           setIsLoading(false);
         });
 
@@ -102,6 +111,7 @@ export default function RootLayout() {
         console.error('❌ App initialization error:', error);
         setIsLoading(false);
         setIsAuthStateKnown(true);
+        setInitialAuthCheckComplete(true);
       } finally {
         setIsReady(true);
         await SplashScreen.hideAsync();
@@ -112,7 +122,7 @@ export default function RootLayout() {
   }, []);
 
   // Check for stored authentication data
-  const checkStoredAuthData = async () => {
+  const checkStoredAuthData = async (): Promise<boolean> => {
     try {
       const storedData = await AsyncStorage.multiGet([
         STORAGE_KEYS.USER_DATA,
@@ -136,14 +146,17 @@ export default function RootLayout() {
           const profile = JSON.parse(userData) as UserProfile;
           setUserProfile(profile);
           console.log('✅ Restored user session from storage');
+          return true;
         } else {
           console.log('⏰ Stored session expired, requiring re-authentication');
           await clearStoredAuthData();
         }
       }
+      return false;
     } catch (error) {
       console.error('❌ Error checking stored auth data:', error);
       await clearStoredAuthData();
+      return false;
     }
   };
 
@@ -163,7 +176,7 @@ export default function RootLayout() {
 
   // Handle navigation based on authentication state
   useEffect(() => {
-    if (!isReady || !isAuthStateKnown || isLoading) return;
+    if (!isReady || !initialAuthCheckComplete || isLoading) return;
 
     const inAuthGroup = segments[0] === '(auth)';
     const inTabsGroup = segments[0] === '(tabs)';
@@ -175,6 +188,7 @@ export default function RootLayout() {
       inAuthGroup,
       inTabsGroup,
       isAuthStateKnown,
+      initialAuthCheckComplete,
       isLoading
     });
 
@@ -191,10 +205,10 @@ export default function RootLayout() {
         router.replace('/(tabs)');
       }
     }
-  }, [user, userProfile, segments, isReady, isLoading, isAuthStateKnown]);
+  }, [user, userProfile, segments, isReady, isLoading, isAuthStateKnown, initialAuthCheckComplete]);
 
   // Show loading screen while initializing or waiting for auth state
-  if (!isReady || !isAuthStateKnown || isLoading) {
+  if (!isReady || !initialAuthCheckComplete || isLoading) {
     return (
       <SafeAreaProvider>
         <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
