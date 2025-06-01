@@ -47,7 +47,7 @@ if (Platform.OS === 'ios') {
   ActionSheetIOS = require('react-native').ActionSheetIOS;
 }
 
-import storageService, { MediaFile, BulkUploadProgress } from '../../services/storage';
+import storageService, { MediaFile, BulkUploadProgress, Album } from '../../services/storage';
 import authService, { UserProfile } from '../../services/auth';
 
 const { width } = Dimensions.get('window');
@@ -74,6 +74,22 @@ export default function VaultScreen() {
   const [uploadProgress, setUploadProgress] = useState<BulkUploadProgress | null>(null);
   const [previewModal, setPreviewModal] = useState({ visible: false, uri: '', type: '' });
   
+  // Album functionality states
+  const [isAlbumMode, setIsAlbumMode] = useState(false);
+  const [albumName, setAlbumName] = useState('');
+  const [albumDescription, setAlbumDescription] = useState('');
+  const [showAlbumList, setShowAlbumList] = useState(false);
+  const [albums, setAlbums] = useState<Album[]>([]);
+  
+  // Album detail view states
+  const [showAlbumDetail, setShowAlbumDetail] = useState(false);
+  const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
+  const [albumMedia, setAlbumMedia] = useState<MediaFile[]>([]);
+  
+  // Delete confirmation modal state
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
+  const [mediaToDelete, setMediaToDelete] = useState<MediaFile | null>(null);
+  
   const router = useRouter();
 
   useEffect(() => {
@@ -94,6 +110,20 @@ export default function VaultScreen() {
       setIsRefreshing(false);
       }
     });
+
+    // Load albums
+    const loadAlbums = async () => {
+      try {
+        const userAlbums = await storageService.getUserAlbums();
+        if (mounted) {
+          setAlbums(userAlbums);
+        }
+      } catch (error) {
+        console.error('Failed to load albums:', error);
+      }
+    };
+    
+    loadAlbums();
 
     // Set a short timeout to stop initial loading if nothing happens
     const loadingTimeout = setTimeout(() => {
@@ -341,6 +371,10 @@ export default function VaultScreen() {
     setSelectedImages([]);
     setCaption('');
     setUploadProgress(null);
+    // Reset album states
+    setIsAlbumMode(false);
+    setAlbumName('');
+    setAlbumDescription('');
   };
 
   const openPreview = (uri: string, type: string) => {
@@ -389,7 +423,16 @@ export default function VaultScreen() {
         });
         return {
           ...file,
-          caption: caption.trim() || undefined,
+          caption: selectedImages.length === 1 
+            ? caption.trim() || undefined 
+            : !isAlbumMode 
+              ? caption.trim() || undefined 
+              : undefined,
+          albumInfo: selectedImages.length > 1 && isAlbumMode ? {
+            albumName: albumName.trim(),
+            albumDescription: albumDescription.trim() || undefined,
+            isAlbum: true
+          } : undefined,
         };
       });
 
@@ -486,8 +529,22 @@ export default function VaultScreen() {
         message = `Amazing! All ${parts.join(' and ')} have been securely saved to the vault! 💖`;
       }
 
+      // Check if this was an album upload before clearing selection
+      const wasAlbumUpload = selectedImages.length > 1 && isAlbumMode;
+
       clearSelection();
       setShowUploadModal(false);
+      
+      // Refresh albums list if this was an album upload
+      if (wasAlbumUpload) {
+        try {
+          const updatedAlbums = await storageService.getUserAlbums();
+          setAlbums(updatedAlbums);
+          console.log('Albums refreshed after upload');
+        } catch (error) {
+          console.error('Failed to refresh albums:', error);
+        }
+      }
       
       Alert.alert(
         "Upload Successful! 🎉", 
@@ -652,9 +709,136 @@ export default function VaultScreen() {
     }
   };
 
+  const openAlbumDetail = async (album: Album) => {
+    try {
+      console.log('🔍 Opening album:', album.name);
+      setSelectedAlbum(album);
+      setShowAlbumList(false);
+      setShowAlbumDetail(true);
+      
+      // Fetch media files for this album
+      const mediaFiles = await storageService.getAlbumMedia(album.id);
+      setAlbumMedia(mediaFiles);
+      
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (error) {
+      console.error('Failed to load album media:', error);
+      Alert.alert('Error', 'Failed to load album content');
+    }
+  };
+
+  const closeAlbumDetail = () => {
+    setShowAlbumDetail(false);
+    setSelectedAlbum(null);
+    setAlbumMedia([]);
+  };
+
+  const refreshAlbumMedia = async () => {
+    if (selectedAlbum) {
+      try {
+        const mediaFiles = await storageService.getAlbumMedia(selectedAlbum.id);
+        setAlbumMedia(mediaFiles);
+      } catch (error) {
+        console.error('Failed to refresh album media:', error);
+      }
+    }
+  };
+
+  const toggleFavoriteInAlbum = async (mediaId: string) => {
+    try {
+      await storageService.toggleFavorite(mediaId);
+      
+      // Update the albumMedia state immediately for real-time UI update
+      setAlbumMedia(prev => prev.map(media => 
+        media.id === mediaId 
+          ? { ...media, isFavorite: !media.isFavorite }
+          : media
+      ));
+      
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      console.error('Toggle favorite error:', error);
+      Alert.alert('Error', 'Failed to update favorite status');
+    }
+  };
+
+  const deleteMediaFromAlbum = async (mediaId: string) => {
+    console.log('🗑️ deleteMediaFromAlbum called for:', mediaId);
+    
+    try {
+      const mediaItem = albumMedia.find(item => item.id === mediaId);
+      if (!mediaItem) {
+        console.error('Media item not found in album');
+        return;
+      }
+      
+      console.log('🗑️ Found media item, type:', mediaItem.category);
+      console.log('🗑️ Opening delete confirmation modal');
+      
+      // Set the media to delete and show confirmation modal
+      setMediaToDelete(mediaItem);
+      setShowDeleteConfirmation(true);
+      
+    } catch (error) {
+      console.error('❌ Error in deleteMediaFromAlbum:', error);
+      Alert.alert('Error', 'Failed to delete media. Please try again.');
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!mediaToDelete) return;
+    
+    console.log('🗑️ Confirming delete for:', mediaToDelete.id);
+    
+    try {
+      await storageService.deleteMedia(mediaToDelete.id);
+      
+      // Remove from album media immediately for real-time UI update
+      setAlbumMedia(prev => prev.filter(media => media.id !== mediaToDelete.id));
+      
+      // Close full screen if deleting the currently viewed media
+      if (selectedMedia?.id === mediaToDelete.id) {
+        closeFullScreen();
+      }
+      
+      // Close confirmation modal
+      setShowDeleteConfirmation(false);
+      setMediaToDelete(null);
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      console.log('✅ Delete completed successfully');
+      
+    } catch (error) {
+      console.error('❌ Delete error:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Error', 'Failed to delete media. Please try again.');
+    }
+  };
+
+  const cancelDelete = () => {
+    console.log('🗑️ Delete cancelled');
+    setShowDeleteConfirmation(false);
+    setMediaToDelete(null);
+  };
+
   const toggleFavorite = async (mediaId: string) => {
     try {
       await storageService.toggleFavorite(mediaId);
+      
+      // Update albumMedia if we're in album detail view
+      if (showAlbumDetail && albumMedia.length > 0) {
+        setAlbumMedia(prev => prev.map(media => 
+          media.id === mediaId 
+            ? { ...media, isFavorite: !media.isFavorite }
+            : media
+        ));
+      }
+      
+      // Update selectedMedia if it's the current media
+      if (selectedMedia?.id === mediaId) {
+        setSelectedMedia(prev => prev ? { ...prev, isFavorite: !prev.isFavorite } : prev);
+      }
+      
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (error) {
       console.error('Toggle favorite error:', error);
@@ -663,10 +847,18 @@ export default function VaultScreen() {
   };
 
   const openFullScreen = (media: MediaFile) => {
-    setSelectedMedia(media);
-    setCaptionText(media.caption || '');
-    setShowFullScreen(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    console.log('🎯 openFullScreen called for:', media.id);
+    console.log('🎯 Current showFullScreen state:', showFullScreen);
+    
+    // Use setTimeout to ensure state updates properly
+    setTimeout(() => {
+      setSelectedMedia(media);
+      setCaptionText(media.caption || '');
+      setShowFullScreen(true);
+      
+      console.log('🎯 Set showFullScreen to true');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }, 100);
   };
 
   const closeFullScreen = () => {
@@ -680,8 +872,21 @@ export default function VaultScreen() {
     if (!selectedMedia) return;
     
     try {
-      // Update caption in storage service (we'll need to add this method)
+      // Update caption in storage service
       await storageService.updateMediaCaption(selectedMedia.id, captionText.trim());
+      
+      // Update albumMedia if we're in album detail view
+      if (showAlbumDetail && albumMedia.length > 0) {
+        setAlbumMedia(prev => prev.map(media => 
+          media.id === selectedMedia.id 
+            ? { ...media, caption: captionText.trim() }
+            : media
+        ));
+      }
+      
+      // Update selectedMedia
+      setSelectedMedia(prev => prev ? { ...prev, caption: captionText.trim() } : prev);
+      
       setEditingCaption(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert('Success', 'Caption updated successfully!');
@@ -695,7 +900,8 @@ export default function VaultScreen() {
     console.log('🗑️ Delete function called for mediaId:', mediaId);
     
     try {
-      const mediaItem = media.find(item => item.id === mediaId);
+      const mediaItem = media.find(item => item.id === mediaId) || 
+                        albumMedia.find(item => item.id === mediaId);
       const mediaType = mediaItem?.category || 'item';
       
       console.log('🗑️ Found media item:', mediaItem ? 'yes' : 'no', 'type:', mediaType);
@@ -718,6 +924,11 @@ export default function VaultScreen() {
                 try {
                   console.log('🗑️ Executing delete for:', mediaId);
                   await storageService.deleteMedia(mediaId);
+                  
+                  // Update albumMedia if we're in album detail view
+                  if (showAlbumDetail && albumMedia.length > 0) {
+                    setAlbumMedia(prev => prev.filter(media => media.id !== mediaId));
+                  }
                   
                   // Close modal if deleting the currently viewed media
                   if (selectedMedia?.id === mediaId) {
@@ -865,17 +1076,30 @@ export default function VaultScreen() {
             {filteredMedia.length} {filteredMedia.length === 1 ? 'memory' : 'memories'}
           </Text>
         </View>
-        <TouchableOpacity 
-          style={styles.addButton}
-          onPress={() => {
-            console.log('🔴 Header plus button pressed');
-            quickUploadToVault();
-          }}
-          activeOpacity={0.7}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Plus color="#ec4899" size={24} />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity 
+            style={styles.albumButton}
+            onPress={() => {
+              console.log('📚 Album button pressed');
+              setShowAlbumList(true);
+            }}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Grid3X3 color="#6b7280" size={20} />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.addButton}
+            onPress={() => {
+              console.log('🔴 Header plus button pressed');
+              quickUploadToVault();
+            }}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Plus color="#ec4899" size={24} />
+          </TouchableOpacity>
+        </View>
       </View>
       {renderFilterBar()}
     </View>
@@ -1131,40 +1355,6 @@ export default function VaultScreen() {
                 </View>
               </Modal>
 
-              {/* Loading overlay during uploads */}
-              {isUploading && (
-                <View style={styles.uploadLoadingOverlay}>
-                  <View style={styles.uploadLoadingContainer}>
-                    <ActivityIndicator size="large" color="#ec4899" />
-                    <Text style={styles.uploadLoadingText}>
-                      {uploadProgress?.totalFiles === 1 ? 'Uploading memory...' : 'Uploading memories...'}
-                    </Text>
-                    {uploadProgress && (
-                      <>
-                        <View style={styles.progressBarContainer}>
-                          <View style={styles.progressBar}>
-                            <View 
-                              style={[
-                                styles.progressFill, 
-                                { width: `${uploadProgress.overallProgress}%` }
-                              ]} 
-                            />
-                          </View>
-                        </View>
-                        <Text style={styles.uploadProgressText}>
-                          {Math.round(uploadProgress.overallProgress)}% complete
-                        </Text>
-                        {uploadProgress.currentFile && (
-                          <Text style={styles.currentFileText}>
-                            Uploading: {uploadProgress.currentFile}
-                          </Text>
-                        )}
-                      </>
-                    )}
-                  </View>
-                </View>
-              )}
-
               <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 style={styles.uploadModalKeyboardAvoid}
@@ -1231,18 +1421,69 @@ export default function VaultScreen() {
                           ))}
                         </ScrollView>
                         
-                        <View style={styles.captionContainer}>
-                          <Text style={styles.captionLabel}>Add a memory note (optional)</Text>
-                          <TextInput
-                            style={styles.captionInput}
-                            placeholder="What makes these moments special?"
-                            placeholderTextColor="#9ca3af"
-                            value={caption}
-                            onChangeText={setCaption}
-                            multiline
-                            maxLength={200}
-                          />
-                          <Text style={styles.characterCount}>{caption.length}/200</Text>
+                        <View style={styles.uploadOptionsContainer}>
+                          {selectedImages.length > 1 && (
+                            <View style={styles.albumToggleContainer}>
+                              <Text style={styles.albumToggleLabel}>Mark as Album</Text>
+                              <TouchableOpacity
+                                style={[styles.toggleSwitch, isAlbumMode && styles.toggleSwitchActive]}
+                                onPress={() => {
+                                  setIsAlbumMode(!isAlbumMode);
+                                  if (!isAlbumMode) {
+                                    setAlbumName('');
+                                    setAlbumDescription('');
+                                  }
+                                }}
+                                activeOpacity={0.8}
+                              >
+                                <View style={[styles.toggleThumb, isAlbumMode && styles.toggleThumbActive]} />
+                              </TouchableOpacity>
+                            </View>
+                          )}
+                          
+                          {selectedImages.length > 1 && isAlbumMode && (
+                            <View style={styles.albumNameContainer}>
+                              <Text style={styles.inputLabel}>Album Name</Text>
+                              <TextInput
+                                style={styles.albumNameInput}
+                                placeholder="Enter album name..."
+                                placeholderTextColor="#9ca3af"
+                                value={albumName}
+                                onChangeText={setAlbumName}
+                                maxLength={50}
+                              />
+                              <Text style={styles.characterCount}>{albumName.length}/50</Text>
+                            </View>
+                          )}
+                          
+                          <View style={styles.captionContainer}>
+                            <Text style={styles.captionLabel}>
+                              {selectedImages.length === 1 
+                                ? "Add a memory note (optional)" 
+                                : isAlbumMode 
+                                  ? "Album Description (optional)"
+                                  : "Add a memory note (optional)"
+                              }
+                            </Text>
+                            <TextInput
+                              style={styles.captionInput}
+                              placeholder={
+                                selectedImages.length === 1 
+                                  ? "What makes these moments special?"
+                                  : isAlbumMode
+                                    ? "What makes this album special?"
+                                    : "What makes these moments special?"
+                              }
+                              placeholderTextColor="#9ca3af"
+                              value={selectedImages.length === 1 ? caption : albumDescription}
+                              onChangeText={selectedImages.length === 1 ? setCaption : setAlbumDescription}
+                              multiline
+                              maxLength={200}
+                            />
+                            <Text style={styles.characterCount}>
+                              {selectedImages.length === 1 ? caption.length : albumDescription.length}/200
+                            </Text>
+                          </View>
                         </View>
                       </View>
                     ) : (
@@ -1321,6 +1562,251 @@ export default function VaultScreen() {
                 </ScrollView>
               </KeyboardAvoidingView>
             </SafeAreaView>
+            
+            {/* Loading overlay during uploads - moved to end to prevent overlapping */}
+            {isUploading && (
+              <View style={styles.uploadLoadingOverlayFixed}>
+                <View style={styles.uploadLoadingContainer}>
+                  <ActivityIndicator size="large" color="#ec4899" />
+                  <Text style={styles.uploadLoadingText}>
+                    {uploadProgress?.totalFiles === 1 ? 'Uploading memory...' : 'Uploading memories...'}
+                  </Text>
+                  {uploadProgress && (
+                    <>
+                      <View style={styles.progressBarContainer}>
+                        <View style={styles.progressBar}>
+                          <View 
+                            style={[
+                              styles.progressFill, 
+                              { width: `${uploadProgress.overallProgress}%` }
+                            ]} 
+                          />
+                        </View>
+                      </View>
+                      <Text style={styles.uploadProgressText}>
+                        {Math.round(uploadProgress.overallProgress)}% complete
+                      </Text>
+                      {uploadProgress.currentFile && (
+                        <Text style={styles.currentFileText}>
+                          Uploading: {uploadProgress.currentFile}
+                        </Text>
+                      )}
+                    </>
+                  )}
+                </View>
+              </View>
+            )}
+          </View>
+        </Modal>
+        
+        {/* Album List Modal */}
+        <Modal
+          visible={showAlbumList}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowAlbumList(false)}
+        >
+          <View style={styles.uploadModalContainer}>
+            <SafeAreaView style={styles.uploadModalSafeArea}>
+              {/* Album List Header */}
+              <View style={styles.uploadModalHeader}>
+                <TouchableOpacity
+                  style={styles.uploadModalCloseButton}
+                  onPress={() => setShowAlbumList(false)}
+                >
+                  <X color="#6b7280" size={24} />
+                </TouchableOpacity>
+                <Text style={styles.uploadModalTitle}>Your Albums</Text>
+                <View style={{ width: 24 }} />
+              </View>
+
+              <ScrollView style={styles.albumListContainer}>
+                {albums.length === 0 ? (
+                  <View style={styles.emptyAlbumContainer}>
+                    <View style={styles.emptyAlbumIconContainer}>
+                      <Grid3X3 color="#d1d5db" size={64} />
+                    </View>
+                    <Text style={styles.emptyAlbumTitle}>No albums yet</Text>
+                    <Text style={styles.emptyAlbumSubtitle}>
+                      Upload multiple images and mark them as an album to create your first album
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.albumGridContainer}>
+                    {albums.map((album, index) => (
+                      <TouchableOpacity 
+                        key={index} 
+                        style={styles.albumItem}
+                        onPress={() => {
+                          openAlbumDetail(album);
+                        }}
+                      >
+                        <Image 
+                          source={{ uri: album.coverImageUrl }} 
+                          style={styles.albumCover}
+                        />
+                        <View style={styles.albumInfo}>
+                          <Text style={styles.albumTitle}>{album.name}</Text>
+                          <Text style={styles.albumCount}>{album.mediaCount} memories</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </ScrollView>
+            </SafeAreaView>
+          </View>
+        </Modal>
+        
+        {/* Album Detail Modal */}
+        <Modal
+          visible={showAlbumDetail}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={closeAlbumDetail}
+        >
+          <View style={styles.uploadModalContainer}>
+            <SafeAreaView style={styles.uploadModalSafeArea}>
+              {/* Album Detail Header */}
+              <View style={styles.uploadModalHeader}>
+                <TouchableOpacity
+                  style={styles.uploadModalCloseButton}
+                  onPress={closeAlbumDetail}
+                >
+                  <X color="#6b7280" size={24} />
+                </TouchableOpacity>
+                <Text style={styles.uploadModalTitle}>
+                  {selectedAlbum?.createdAt 
+                    ? new Date(selectedAlbum.createdAt.toDate()).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                      })
+                    : 'Album'
+                  }
+                </Text>
+                <View style={{ width: 24 }} />
+              </View>
+
+              <ScrollView style={styles.albumDetailContainer}>
+                {/* Album Info Section */}
+                {selectedAlbum && (
+                  <View style={styles.albumInfoSection}>
+                    <Text style={styles.albumDetailTitle}>{selectedAlbum.name}</Text>
+                    {selectedAlbum.description && (
+                      <Text style={styles.albumDetailDescription}>
+                        {selectedAlbum.description}
+                      </Text>
+                    )}
+                    <Text style={styles.albumDetailCount}>
+                      {albumMedia.length} {albumMedia.length === 1 ? 'memory' : 'memories'}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Album Media Grid */}
+                {albumMedia.length > 0 ? (
+                  <View style={styles.albumMediaGrid}>
+                    {albumMedia.map((media, index) => (
+                      <View
+                        key={media.id}
+                        style={styles.albumMediaItem}
+                      >
+                        <TouchableOpacity
+                          style={styles.albumMediaImageContainer}
+                          onPress={() => {
+                            console.log('🖼️ Album image clicked:', media.id);
+                            openFullScreen(media);
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <Image
+                            source={{ uri: media.thumbnailURL || media.downloadURL }}
+                            style={styles.albumMediaImage}
+                          />
+                          
+                          {/* Media type indicators */}
+                          {media.category === 'video' && (
+                            <View style={styles.videoOverlay}>
+                              <Play color="#ffffff" size={20} fill="#ffffff" />
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                        
+                        {/* Media actions */}
+                        <View style={styles.mediaActions}>
+                          <TouchableOpacity
+                            onPress={() => {
+                              console.log('❤️ Heart clicked for:', media.id);
+                              toggleFavoriteInAlbum(media.id);
+                            }}
+                            style={styles.actionButton}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Heart
+                              color={media.isFavorite ? "#ec4899" : "#ffffff"}
+                              size={14}
+                              fill={media.isFavorite ? "#ec4899" : "transparent"}
+                            />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => {
+                              console.log('🗑️ Delete clicked for:', media.id);
+                              deleteMediaFromAlbum(media.id);
+                            }}
+                            style={styles.actionButton}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Trash2 color="#ffffff" size={14} />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.emptyAlbumMedia}>
+                    <Text style={styles.emptyAlbumMediaText}>
+                      No media found in this album
+                    </Text>
+                  </View>
+                )}
+              </ScrollView>
+            </SafeAreaView>
+          </View>
+        </Modal>
+        
+        {/* Delete Confirmation Modal */}
+        <Modal
+          visible={showDeleteConfirmation}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={cancelDelete}
+        >
+          <View style={styles.deleteModalContainer}>
+            <View style={styles.deleteModalContent}>
+              <Text style={styles.deleteModalTitle}>Delete Memory</Text>
+              <Text style={styles.deleteModalMessage}>
+                Are you sure you want to permanently delete this {mediaToDelete?.category || 'item'}? This action cannot be undone.
+              </Text>
+              
+              <View style={styles.deleteModalButtons}>
+                <TouchableOpacity
+                  style={styles.deleteModalCancelButton}
+                  onPress={cancelDelete}
+                >
+                  <Text style={styles.deleteModalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={styles.deleteModalDeleteButton}
+                  onPress={confirmDelete}
+                >
+                  <Text style={styles.deleteModalDeleteText}>Delete</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </Modal>
         
@@ -1399,6 +1885,27 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 16,
     color: '#6b7280',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  albumButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#fdf2f8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+  },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
   },
   addButton: {
     width: 48,
@@ -1545,7 +2052,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  uploadLoadingOverlay: {
+  uploadLoadingOverlayFixed: {
     position: 'absolute',
     top: 0,
     left: 0,
@@ -1651,9 +2158,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   captionLabel: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
-    color: '#ffffff',
+    color: '#1f2937',
+    marginBottom: 12,
   },
   editCaptionButton: {
     paddingHorizontal: 12,
@@ -1670,13 +2178,21 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   captionInput: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    backgroundColor: '#ffffff',
     color: '#1f2937',
     fontSize: 16,
-    padding: 12,
-    borderRadius: 8,
-    minHeight: 60,
+    padding: 16,
+    borderRadius: 12,
+    minHeight: 80,
     textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    marginBottom: 8,
+  },
+  characterCount: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'right',
   },
   saveCaptionButton: {
     paddingHorizontal: 16,
@@ -1905,29 +2421,6 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 16,
   },
-  captionLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1f2937',
-    marginBottom: 12,
-  },
-  captionInput: {
-    backgroundColor: '#ffffff',
-    color: '#1f2937',
-    fontSize: 16,
-    padding: 16,
-    borderRadius: 12,
-    minHeight: 80,
-    textAlignVertical: 'top',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    marginBottom: 8,
-  },
-  characterCount: {
-    fontSize: 12,
-    color: '#9ca3af',
-    textAlign: 'right',
-  },
   selectContainer: {
     flex: 1,
     justifyContent: 'flex-start',
@@ -2026,6 +2519,259 @@ const styles = StyleSheet.create({
   },
   uploadButtonText: {
     fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  uploadOptionsContainer: {
+    marginBottom: 32,
+  },
+  albumToggleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f9fafb',
+    padding: 20,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  albumToggleLabel: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  toggleSwitch: {
+    width: 50,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#e5e7eb',
+    padding: 2,
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  toggleSwitchActive: {
+    backgroundColor: '#ec4899',
+  },
+  toggleThumb: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+    alignSelf: 'flex-start',
+  },
+  toggleThumbActive: {
+    alignSelf: 'flex-end',
+  },
+  albumNameContainer: {
+    backgroundColor: '#f9fafb',
+    padding: 20,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 12,
+  },
+  albumNameInput: {
+    backgroundColor: '#ffffff',
+    color: '#1f2937',
+    fontSize: 16,
+    padding: 16,
+    borderRadius: 12,
+    minHeight: 50,
+    textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    marginBottom: 8,
+  },
+  albumListContainer: {
+    padding: 24,
+  },
+  emptyAlbumContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  emptyAlbumIconContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#f9fafb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  emptyAlbumTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  emptyAlbumSubtitle: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 32,
+  },
+  albumGridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+  },
+  albumItem: {
+    width: itemSize,
+    height: itemSize,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#f9fafb',
+    position: 'relative',
+  },
+  albumCover: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  albumInfo: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 16,
+  },
+  albumTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  albumCount: {
+    fontSize: 14,
+    color: '#ffffff',
+  },
+  albumDetailContainer: {
+    flex: 1,
+    padding: 24,
+  },
+  albumInfoSection: {
+    marginBottom: 24,
+  },
+  albumDetailTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 8,
+  },
+  albumDetailDescription: {
+    fontSize: 16,
+    color: '#6b7280',
+    marginBottom: 16,
+  },
+  albumDetailCount: {
+    fontSize: 14,
+    color: '#9ca3af',
+    marginBottom: 24,
+  },
+  albumMediaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+  },
+  albumMediaItem: {
+    width: itemSize,
+    height: itemSize,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#f9fafb',
+    position: 'relative',
+  },
+  albumMediaImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  albumMediaImageContainer: {
+    width: '100%',
+    height: '100%',
+  },
+  emptyAlbumMedia: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  emptyAlbumMediaText: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+  },
+  deleteModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deleteModalContent: {
+    backgroundColor: '#ffffff',
+    padding: 24,
+    borderRadius: 16,
+    width: '80%',
+    alignItems: 'center',
+  },
+  deleteModalTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 16,
+  },
+  deleteModalMessage: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  deleteModalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  deleteModalCancelButton: {
+    backgroundColor: '#f9fafb',
+    padding: 12,
+    borderRadius: 8,
+    marginRight: 16,
+  },
+  deleteModalCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  deleteModalDeleteButton: {
+    backgroundColor: '#ec4899',
+    padding: 12,
+    borderRadius: 8,
+  },
+  deleteModalDeleteText: {
+    fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
   },

@@ -37,5 +37,25 @@ service cloud.firestore {
       allow delete: if request.auth != null && 
         request.auth.uid == resource.data.uploadedBy;
     }
+    
+    // Albums collection - users can read/write their own albums and their partner's albums
+    match /albums/{albumId} {
+      // Allow reading albums if user created them or is partner
+      allow read: if request.auth != null && 
+        (request.auth.uid == resource.data.createdBy || 
+         request.auth.uid == resource.data.partnerId);
+      
+      // Allow creating albums if user is authenticated and setting themselves as creator
+      allow create: if request.auth != null && 
+        request.auth.uid == request.resource.data.createdBy;
+      
+      // Allow updating albums if user created them
+      allow update: if request.auth != null && 
+        request.auth.uid == resource.data.createdBy;
+      
+      // Allow deleting albums if user created them
+      allow delete: if request.auth != null && 
+        request.auth.uid == resource.data.createdBy;
+    }
   }
 } 

@@ -43,6 +43,20 @@ export interface MediaFile {
   isFavorite: boolean;
   isShared: boolean;
   metadata?: Record<string, any>;
+  albumId?: string; // Link to album if part of one
+}
+
+export interface Album {
+  id: string;
+  name: string;
+  description?: string;
+  coverImageUrl: string;
+  createdBy: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  mediaCount: number;
+  isShared: boolean;
+  mediaIds: string[]; // Array of media file IDs in this album
 }
 
 export interface BulkUploadProgress {
@@ -227,7 +241,17 @@ class StorageService {
   }
 
   async uploadMultipleFiles(
-    files: Array<{ uri: string; name: string; type: string; caption?: string }>,
+    files: Array<{ 
+      uri: string; 
+      name: string; 
+      type: string; 
+      caption?: string;
+      albumInfo?: {
+        albumName: string;
+        albumDescription?: string;
+        isAlbum: boolean;
+      };
+    }>,
     onProgress?: (progress: BulkUploadProgress) => void
   ): Promise<MediaFile[]> {
     try {
@@ -246,6 +270,12 @@ class StorageService {
         progress: 0,
         isCompleted: false
       }));
+
+      // Check if this is an album upload
+      const albumInfo = files[0]?.albumInfo;
+      const isAlbumUpload = albumInfo?.isAlbum && albumInfo.albumName.trim();
+
+      console.log('Is album upload:', isAlbumUpload, albumInfo);
 
       // Initialize progress
       const updateProgress = () => {
@@ -294,12 +324,29 @@ class StorageService {
 
       console.log('Bulk upload completed. Successful uploads:', results.length);
 
+      // Create album if this was an album upload
+      if (isAlbumUpload && results.length > 0 && albumInfo) {
+        try {
+          console.log('Creating album after successful uploads...');
+          const album = await this.createAlbum(
+            albumInfo.albumName,
+            albumInfo.albumDescription,
+            results
+          );
+          console.log('Album created successfully:', album.id);
+        } catch (albumError) {
+          console.error('Album creation failed:', albumError);
+          // Don't throw here - uploads were successful, just album creation failed
+        }
+      }
+
       // Log analytics
       if (analytics) {
         logEvent(analytics, 'bulk_upload_completed', {
           total_files: totalFiles,
           successful_uploads: results.length,
           failed_uploads: totalFiles - results.length,
+          is_album: isAlbumUpload,
           user_id: currentUser.uid
         });
       }
@@ -538,21 +585,16 @@ class StorageService {
     try {
       const currentUser = authService.getCurrentUser();
       if (!currentUser) {
-        return {
-          totalSize: 0,
-          fileCount: 0,
-          mediaByType: {}
-        };
+        throw new Error('User must be authenticated');
       }
 
-      console.log('Loading storage stats for user:', currentUser.uid);
-
-      const q = query(
+      const mediaQuery = query(
         collection(db, 'media'),
         where('uploadedBy', '==', currentUser.uid)
       );
 
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(mediaQuery);
+      
       let totalSize = 0;
       const mediaByType: Record<string, number> = {
         photo: 0,
@@ -562,30 +604,196 @@ class StorageService {
       };
 
       snapshot.docs.forEach(doc => {
-        const data = doc.data() as MediaFile;
-        totalSize += data.fileSize || 0;
-        mediaByType[data.category] = (mediaByType[data.category] || 0) + 1;
+        const media = doc.data() as MediaFile;
+        totalSize += media.fileSize;
+        mediaByType[media.category] = (mediaByType[media.category] || 0) + 1;
       });
 
-      const stats = {
+      return {
         totalSize,
-        fileCount: snapshot.size,
+        fileCount: snapshot.docs.length,
         mediaByType
       };
-
-      console.log('Storage stats loaded:', stats);
-      return stats;
     } catch (error) {
       console.error('Get storage stats error:', error);
-      return {
-        totalSize: 0,
-        fileCount: 0,
-        mediaByType: {}
-      };
+      throw error;
     }
   }
 
-  // Cleanup
+  // Album Management Methods
+  async createAlbum(
+    name: string,
+    description?: string,
+    mediaFiles: MediaFile[] = []
+  ): Promise<Album> {
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated to create albums');
+      }
+
+      console.log('Creating album:', name, 'with', mediaFiles.length, 'files');
+
+      // Use the first image as cover image, or a default
+      const coverImageUrl = mediaFiles.length > 0 
+        ? mediaFiles.find(f => f.category === 'photo')?.downloadURL || mediaFiles[0].downloadURL
+        : '';
+
+      const albumData: Omit<Album, 'id'> = {
+        name: name.trim(),
+        description: description?.trim(),
+        coverImageUrl,
+        createdBy: currentUser.uid,
+        createdAt: serverTimestamp() as Timestamp,
+        updatedAt: serverTimestamp() as Timestamp,
+        mediaCount: mediaFiles.length,
+        isShared: false,
+        mediaIds: mediaFiles.map(f => f.id)
+      };
+
+      console.log('Creating album document in Firestore...');
+      const albumRef = await addDoc(collection(db, 'albums'), albumData);
+      console.log('Album created with ID:', albumRef.id);
+
+      // Update media files to reference this album
+      if (mediaFiles.length > 0) {
+        console.log('Updating media files to reference album...');
+        const updatePromises = mediaFiles.map(mediaFile => 
+          updateDoc(doc(db, 'media', mediaFile.id), {
+            albumId: albumRef.id,
+            updatedAt: serverTimestamp()
+          })
+        );
+        await Promise.all(updatePromises);
+        console.log('Media files updated with album reference');
+      }
+
+      const createdAlbum: Album = {
+        id: albumRef.id,
+        ...albumData,
+        createdAt: albumData.createdAt,
+        updatedAt: albumData.updatedAt
+      };
+
+      return createdAlbum;
+    } catch (error) {
+      console.error('Create album error:', error);
+      throw error;
+    }
+  }
+
+  async getUserAlbums(): Promise<Album[]> {
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated');
+      }
+
+      const albumQuery = query(
+        collection(db, 'albums'),
+        where('createdBy', '==', currentUser.uid),
+        orderBy('createdAt', 'desc')
+      );
+
+      const snapshot = await getDocs(albumQuery);
+      const albums: Album[] = [];
+
+      snapshot.docs.forEach(doc => {
+        const albumData = doc.data();
+        albums.push({
+          id: doc.id,
+          ...albumData
+        } as Album);
+      });
+
+      console.log('Retrieved', albums.length, 'albums for user');
+      return albums;
+    } catch (error) {
+      console.error('Get user albums error:', error);
+      throw error;
+    }
+  }
+
+  async getAlbumMedia(albumId: string): Promise<MediaFile[]> {
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated');
+      }
+
+      console.log('Fetching media for album:', albumId);
+
+      const mediaQuery = query(
+        collection(db, 'media'),
+        where('albumId', '==', albumId),
+        where('uploadedBy', '==', currentUser.uid)
+        // Removed orderBy to avoid composite index requirement
+        // orderBy('uploadedAt', 'desc')
+      );
+
+      const snapshot = await getDocs(mediaQuery);
+      const mediaFiles: MediaFile[] = [];
+
+      snapshot.docs.forEach(doc => {
+        const mediaData = doc.data();
+        mediaFiles.push({
+          id: doc.id,
+          ...mediaData
+        } as MediaFile);
+      });
+
+      // Sort manually by upload date (newest first)
+      mediaFiles.sort((a, b) => {
+        const aTime = a.uploadedAt?.toMillis?.() || 0;
+        const bTime = b.uploadedAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      });
+
+      console.log('Retrieved', mediaFiles.length, 'media files for album', albumId);
+      return mediaFiles;
+    } catch (error) {
+      console.error('Get album media error:', error);
+      throw error;
+    }
+  }
+
+  async deleteAlbum(albumId: string): Promise<void> {
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        throw new Error('User must be authenticated');
+      }
+
+      console.log('Deleting album:', albumId);
+
+      // First, remove album reference from all media files
+      const mediaQuery = query(
+        collection(db, 'media'),
+        where('albumId', '==', albumId),
+        where('uploadedBy', '==', currentUser.uid)
+      );
+
+      const mediaSnapshot = await getDocs(mediaQuery);
+      const updatePromises = mediaSnapshot.docs.map(doc => 
+        updateDoc(doc.ref, {
+          albumId: null,
+          updatedAt: serverTimestamp()
+        })
+      );
+
+      await Promise.all(updatePromises);
+      console.log('Removed album reference from', mediaSnapshot.docs.length, 'media files');
+
+      // Delete the album document
+      await deleteDoc(doc(db, 'albums', albumId));
+      console.log('Album deleted successfully');
+
+    } catch (error) {
+      console.error('Delete album error:', error);
+      throw error;
+    }
+  }
+
   cleanup() {
     this.mediaListeners = [];
   }
