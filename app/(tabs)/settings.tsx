@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   View, 
   Text, 
@@ -6,9 +6,12 @@ import {
   TouchableOpacity, 
   Switch, 
   Alert,
-  ScrollView
+  ScrollView,
+  TextInput,
+  ActivityIndicator,
+  Clipboard
 } from 'react-native';
-import { router } from 'expo-router';
+import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { 
@@ -22,42 +25,73 @@ import {
   Heart,
   Info,
   Palette,
-  Bell
+  Bell,
+  Copy,
+  UserPlus,
+  CheckCircle,
+  Clock,
+  XCircle
 } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import authService, { UserProfile } from '../../services/auth';
+import storageService from '../../services/storage';
 
 export default function SettingsScreen() {
-  const [biometricsEnabled, setBiometricsEnabled] = useState(true);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [biometricsEnabled, setBiometricsEnabled] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [isBiometricsAvailable, setIsBiometricsAvailable] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [showPartnerDialog, setShowPartnerDialog] = useState(false);
+  const [partnerCode, setPartnerCode] = useState('');
+  const [storageStats, setStorageStats] = useState<{
+    totalSize: number;
+    fileCount: number;
+    mediaByType: Record<string, number>;
+  } | null>(null);
+  const router = useRouter();
   
-  // Mock data for demo
-  const username = "Alex";
-  const partnerUsername = "Jordan";
-  const mediaCount = 42;
-  
-  React.useEffect(() => {
+  useEffect(() => {
+    // Subscribe to user profile changes
+    const unsubscribe = authService.onProfileChange((profile) => {
+      setUserProfile(profile);
+    });
+
     checkBiometricsAvailability();
+    loadStorageStats();
+
+    return unsubscribe;
   }, []);
   
   const checkBiometricsAvailability = async () => {
+    try {
     const compatible = await LocalAuthentication.hasHardwareAsync();
     const enrolled = await LocalAuthentication.isEnrolledAsync();
     setIsBiometricsAvailable(compatible && enrolled);
+    } catch (error) {
+      console.error('Biometrics check error:', error);
+    }
+  };
+
+  const loadStorageStats = async () => {
+    try {
+      const stats = await storageService.getStorageStats();
+      setStorageStats(stats);
+    } catch (error) {
+      console.error('Storage stats error:', error);
+    }
   };
   
   const handleBiometricsToggle = async (value: boolean) => {
     if (value) {
-      // Verify identity before enabling biometrics
       try {
-        const result = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Verify identity to enable biometrics',
-          disableDeviceFallback: false,
-        });
-        
-        if (result.success) {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Verify identity to enable biometrics',
+        disableDeviceFallback: false,
+      });
+      
+      if (result.success) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           setBiometricsEnabled(true);
           Alert.alert("Success", "Biometric authentication enabled!");
         }
@@ -70,21 +104,113 @@ export default function SettingsScreen() {
       Alert.alert("Disabled", "Biometric authentication disabled.");
     }
   };
+
+  const generatePartnerCode = async () => {
+    if (!userProfile) return;
+
+    try {
+      setIsLoading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      const code = await authService.generatePartnerConnection();
+      
+      Alert.alert(
+        'Partner Code Generated! 💕',
+        `Your partner code is: ${code}\n\nShare this code with your partner to connect your vaults. The code will expire in 24 hours.`,
+        [
+          {
+            text: 'Copy Code',
+            onPress: () => {
+              Clipboard.setString(code);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert('Copied!', 'Partner code copied to clipboard');
+            }
+          },
+          { text: 'OK' }
+        ]
+      );
+    } catch (error) {
+      console.error('Generate partner code error:', error);
+      Alert.alert('Error', 'Failed to generate partner code. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const connectWithPartner = async () => {
+    if (!partnerCode.trim()) {
+      Alert.alert('Error', 'Please enter a partner code');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      await authService.connectWithPartner(partnerCode.trim().toUpperCase());
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        'Connected! 💖',
+        'You are now connected with your partner. You can now share your vault and create memories together!',
+        [{ text: 'Amazing!', onPress: () => setShowPartnerDialog(false) }]
+      );
+      setPartnerCode('');
+    } catch (error: any) {
+      console.error('Connect partner error:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Connection Failed', error.message || 'Please check the code and try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const disconnectPartner = async () => {
+    Alert.alert(
+      'Disconnect Partner',
+      'Are you sure you want to disconnect from your partner? You will no longer share your vault.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsLoading(true);
+              await authService.disconnectPartner();
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert('Disconnected', 'You have been disconnected from your partner.');
+            } catch (error) {
+              console.error('Disconnect error:', error);
+              Alert.alert('Error', 'Failed to disconnect. Please try again.');
+            } finally {
+              setIsLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
   
   const handleLogout = () => {
     Alert.alert(
       "Logout",
       "Are you sure you want to logout?",
       [
-        {
-          text: "Cancel",
-          style: "cancel"
-        },
+        { text: "Cancel", style: "cancel" },
         {
           text: "Logout",
-          onPress: () => {
+          onPress: async () => {
+            try {
+              setIsLoading(true);
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            router.replace('/(auth)');
+              await authService.signOut();
+            } catch (error) {
+              console.error('Logout error:', error);
+              Alert.alert('Error', 'Failed to logout. Please try again.');
+            } finally {
+              setIsLoading(false);
+            }
           },
           style: "destructive"
         }
@@ -97,20 +223,47 @@ export default function SettingsScreen() {
       "Clear Vault",
       "Are you sure you want to delete all memories? This action cannot be undone.",
       [
-        {
-          text: "Cancel",
-          style: "cancel"
-        },
+        { text: "Cancel", style: "cancel" },
         {
           text: "Delete All",
           onPress: () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-            Alert.alert("Success", "All memories have been deleted.");
+              Alert.alert("Success", "All memories have been deleted.");
           },
           style: "destructive"
         }
       ]
     );
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const getPartnerStatusIcon = () => {
+    switch (userProfile?.partnerStatus) {
+      case 'connected':
+        return <CheckCircle color="#10b981" size={20} />;
+      case 'pending':
+        return <Clock color="#f59e0b" size={20} />;
+      default:
+        return <XCircle color="#6b7280" size={20} />;
+    }
+  };
+
+  const getPartnerStatusText = () => {
+    switch (userProfile?.partnerStatus) {
+      case 'connected':
+        return 'Connected';
+      case 'pending':
+        return 'Code Generated (Pending)';
+      default:
+        return 'Not Connected';
+    }
   };
   
   const SettingItem = ({ 
@@ -153,15 +306,133 @@ export default function SettingsScreen() {
       {rightComponent}
     </TouchableOpacity>
   );
+
+  if (!userProfile) {
+    return (
+      <View style={styles.container}>
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.header}>
+            <Heart color="#ec4899" size={24} />
+            <Text style={styles.title}>Settings</Text>
+            <Text style={styles.subtitle}>Customize your VaultLove experience</Text>
+          </View>
+          
+          <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>👤 Account</Text>
+              
+              <SettingItem
+                icon={<UserCircle color="#ec4899" size={24} />}
+                title="Your Name"
+                value="Loading..."
+                description="Loading user information..."
+              />
+
+              <SettingItem
+                icon={<XCircle color="#6b7280" size={20} />}
+                title="Partner Connection"
+                value="Loading..."
+                description="Checking connection status..."
+              />
+            </View>
+            
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>🔒 Security</Text>
+              
+              {isBiometricsAvailable && (
+                <SettingItem
+                  icon={<Fingerprint color="#ec4899" size={24} />}
+                  title="Biometric Authentication"
+                  description="Unlock VaultLove using your fingerprint or Face ID"
+                  rightComponent={
+                  <Switch
+                    value={biometricsEnabled}
+                    onValueChange={handleBiometricsToggle}
+                    trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
+                    thumbColor="#ffffff"
+                  />
+                  }
+                />
+              )}
+              
+              <SettingItem
+                icon={<Lock color="#ec4899" size={24} />}
+                title="Change Password"
+                description="Update your account password"
+                onPress={() => Alert.alert("Feature", "Password change coming soon!")}
+              />
+            </View>
+            
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>💝 Vault</Text>
+              
+              <SettingItem
+                icon={<Shield color="#ec4899" size={24} />}
+                title="Storage Usage"
+                value={storageStats ? formatFileSize(storageStats.totalSize) : 'Loading...'}
+                description={storageStats ? `${storageStats.fileCount} files stored` : 'Calculating...'}
+                onPress={loadStorageStats}
+              />
+              
+              <SettingItem
+                icon={<Bell color="#ec4899" size={24} />}
+                title="Memory Reminders"
+                description="Get notified about special moments"
+                rightComponent={
+                  <Switch
+                    value={notificationsEnabled}
+                    onValueChange={(value) => {
+                      setNotificationsEnabled(value);
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    }}
+                    trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
+                    thumbColor="#ffffff"
+                  />
+                }
+              />
+            </View>
+            
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>⚙️ App</Text>
+              
+              <SettingItem
+                icon={<Palette color="#ec4899" size={24} />}
+                title="Theme"
+                value="Light"
+                description="Customize your app appearance"
+                onPress={() => Alert.alert("Feature", "Theme options coming soon!")}
+              />
+              
+              <SettingItem
+                icon={<Info color="#ec4899" size={24} />}
+                title="About VaultLove"
+                description="Version 1.0.0 • Built with ❤️"
+                onPress={() => Alert.alert("VaultLove", "A secure vault for your precious memories.\n\nBuilt with React Native & Expo\nPowered by Firebase")}
+              />
+            </View>
+            
+            <View style={styles.footer}>
+              <Text style={styles.footerText}>
+                Made with 💖 for couples who cherish their memories
+              </Text>
+            </View>
+          </ScrollView>
+
+          {isLoading && (
+            <View style={styles.loadingOverlay}>
+              <ActivityIndicator size="large" color="#ec4899" />
+            </View>
+          )}
+        </SafeAreaView>
+      </View>
+    );
+  }
   
   return (
-    <LinearGradient
-      colors={['#0c0c0c', '#090909']}
-      style={styles.container}
-    >
+    <View style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
-          <Heart color="#ff2d55" size={24} />
+          <Heart color="#ec4899" size={24} />
           <Text style={styles.title}>Settings</Text>
           <Text style={styles.subtitle}>Customize your VaultLove experience</Text>
         </View>
@@ -171,16 +442,65 @@ export default function SettingsScreen() {
             <Text style={styles.sectionTitle}>👤 Account</Text>
             
             <SettingItem
-              icon={<UserCircle color="#ff2d55" size={24} />}
+              icon={<UserCircle color="#ec4899" size={24} />}
               title="Your Name"
-              value={username}
+              value={userProfile.name}
+              description={userProfile.email}
             />
-            
+
             <SettingItem
-              icon={<Users color="#ff2d55" size={24} />}
-              title="Partner's Name"
-              value={partnerUsername}
-              description="Share your vault with your loved one"
+              icon={getPartnerStatusIcon()}
+              title="Partner Connection"
+              value={getPartnerStatusText()}
+              description={
+                userProfile.partnerStatus === 'connected' 
+                  ? 'Sharing vault with your partner'
+                  : userProfile.partnerStatus === 'pending'
+                  ? 'Waiting for partner to join'
+                  : 'Connect with your partner to share memories'
+              }
+              onPress={() => {
+                if (userProfile.partnerStatus === 'connected') {
+                  // Show disconnect option
+                  Alert.alert(
+                    'Partner Connected',
+                    'You are connected with your partner. What would you like to do?',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Disconnect', onPress: disconnectPartner, style: 'destructive' }
+                    ]
+                  );
+                } else if (userProfile.partnerStatus === 'pending') {
+                  // Show code again
+                  Alert.alert(
+                    'Partner Code Active',
+                    `Your partner code: ${userProfile.partnerCode}\n\nShare this with your partner to connect.`,
+                    [
+                      {
+                        text: 'Copy Code',
+                        onPress: () => {
+                          if (userProfile.partnerCode) {
+                            Clipboard.setString(userProfile.partnerCode);
+                            Alert.alert('Copied!', 'Partner code copied to clipboard');
+                          }
+                        }
+                      },
+                      { text: 'OK' }
+                    ]
+                  );
+                } else {
+                  // Show connection options
+                  Alert.alert(
+                    'Connect with Partner',
+                    'Choose how to connect with your partner',
+                    [
+                      { text: 'Generate Code', onPress: generatePartnerCode },
+                      { text: 'Enter Code', onPress: () => setShowPartnerDialog(true) },
+                      { text: 'Cancel', style: 'cancel' }
+                    ]
+                  );
+                }
+              }}
             />
           </View>
           
@@ -189,40 +509,41 @@ export default function SettingsScreen() {
             
             {isBiometricsAvailable && (
               <SettingItem
-                icon={<Fingerprint color="#ff2d55" size={24} />}
+                icon={<Fingerprint color="#ec4899" size={24} />}
                 title="Biometric Authentication"
                 description="Unlock VaultLove using your fingerprint or Face ID"
                 rightComponent={
-                  <Switch
-                    value={biometricsEnabled}
-                    onValueChange={handleBiometricsToggle}
-                    trackColor={{ false: '#3a3a3c', true: '#ff2d55' }}
-                    thumbColor="#fff"
-                  />
+                <Switch
+                  value={biometricsEnabled}
+                  onValueChange={handleBiometricsToggle}
+                  trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
+                  thumbColor="#ffffff"
+                />
                 }
               />
             )}
             
             <SettingItem
-              icon={<Lock color="#ff2d55" size={24} />}
-              title="Change PIN"
-              description="Update your 6-digit security PIN"
-              onPress={() => Alert.alert("Feature", "PIN change coming soon!")}
+              icon={<Lock color="#ec4899" size={24} />}
+              title="Change Password"
+              description="Update your account password"
+              onPress={() => Alert.alert("Feature", "Password change coming soon!")}
             />
-          </View>
+              </View>
           
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>💝 Vault</Text>
             
             <SettingItem
-              icon={<Shield color="#ff2d55" size={24} />}
-              title="Total Memories"
-              value={`${mediaCount} items`}
-              description="Precious moments safely stored"
+              icon={<Shield color="#ec4899" size={24} />}
+              title="Storage Usage"
+              value={storageStats ? formatFileSize(storageStats.totalSize) : 'Loading...'}
+              description={storageStats ? `${storageStats.fileCount} files stored` : 'Calculating...'}
+              onPress={loadStorageStats}
             />
             
             <SettingItem
-              icon={<Bell color="#ff2d55" size={24} />}
+              icon={<Bell color="#ec4899" size={24} />}
               title="Memory Reminders"
               description="Get notified about special moments"
               rightComponent={
@@ -232,8 +553,8 @@ export default function SettingsScreen() {
                     setNotificationsEnabled(value);
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   }}
-                  trackColor={{ false: '#3a3a3c', true: '#ff2d55' }}
-                  thumbColor="#fff"
+                  trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
+                  thumbColor="#ffffff"
                 />
               }
             />
@@ -243,26 +564,26 @@ export default function SettingsScreen() {
             <Text style={styles.sectionTitle}>⚙️ App</Text>
             
             <SettingItem
-              icon={<Palette color="#ff2d55" size={24} />}
+              icon={<Palette color="#ec4899" size={24} />}
               title="Theme"
-              value="Dark"
+              value="Light"
               description="Customize your app appearance"
               onPress={() => Alert.alert("Feature", "Theme options coming soon!")}
             />
             
             <SettingItem
-              icon={<Info color="#ff2d55" size={24} />}
+              icon={<Info color="#ec4899" size={24} />}
               title="About VaultLove"
               description="Version 1.0.0 • Built with ❤️"
-              onPress={() => Alert.alert("VaultLove", "A secure vault for your precious memories.\n\nBuilt with React Native & Expo")}
+              onPress={() => Alert.alert("VaultLove", "A secure vault for your precious memories.\n\nBuilt with React Native & Expo\nPowered by Firebase")}
             />
-          </View>
+              </View>
           
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>⚠️ Danger Zone</Text>
             
             <SettingItem
-              icon={<Trash2 color="#ff3b30" size={24} />}
+              icon={<Trash2 color="#ef4444" size={24} />}
               title="Clear All Memories"
               description="Permanently delete all stored content"
               onPress={handleClearVault}
@@ -270,7 +591,7 @@ export default function SettingsScreen() {
             />
             
             <SettingItem
-              icon={<LogOut color="#ff3b30" size={24} />}
+              icon={<LogOut color="#ef4444" size={24} />}
               title="Logout"
               description="Sign out of your account"
               onPress={handleLogout}
@@ -284,95 +605,163 @@ export default function SettingsScreen() {
             </Text>
           </View>
         </ScrollView>
+
+        {/* Partner Code Input Dialog */}
+        {showPartnerDialog && (
+          <View style={styles.dialogOverlay}>
+            <View style={styles.dialogContainer}>
+              <Text style={styles.dialogTitle}>Connect with Partner</Text>
+              <Text style={styles.dialogSubtitle}>
+                Enter the partner code shared by your loved one
+              </Text>
+              
+              <TextInput
+                style={styles.dialogInput}
+                placeholder="Enter partner code (e.g. ALEX-1234)"
+                placeholderTextColor="#9ca3af"
+                value={partnerCode}
+                onChangeText={setPartnerCode}
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+              
+              <View style={styles.dialogButtons}>
+                <TouchableOpacity
+                  style={styles.dialogCancelButton}
+                  onPress={() => {
+                    setShowPartnerDialog(false);
+                    setPartnerCode('');
+                  }}
+                >
+                  <Text style={styles.dialogCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.dialogConnectButton, isLoading && styles.dialogButtonDisabled]}
+                  onPress={connectWithPartner}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.dialogConnectText}>Connect</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {isLoading && (
+          <View style={styles.loadingOverlay}>
+            <ActivityIndicator size="large" color="#ec4899" />
+          </View>
+        )}
       </SafeAreaView>
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#ffffff',
   },
   safeArea: {
     flex: 1,
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 16,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#6b7280',
+  },
   header: {
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 20,
+    paddingHorizontal: 24,
+    paddingVertical: 24,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    borderBottomColor: '#f3f4f6',
   },
   title: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 28,
-    color: '#fff',
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#1f2937',
     marginTop: 8,
     marginBottom: 4,
   },
   subtitle: {
-    fontFamily: 'Inter_400Regular',
     fontSize: 16,
-    color: '#999',
+    color: '#6b7280',
     textAlign: 'center',
   },
   content: {
     flex: 1,
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
   },
   section: {
     marginTop: 32,
   },
   sectionTitle: {
-    fontFamily: 'Inter_600SemiBold',
     fontSize: 18,
-    color: '#fff',
+    fontWeight: '600',
+    color: '#1f2937',
     marginBottom: 16,
     paddingHorizontal: 4,
   },
   settingItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: '#ffffff',
     borderRadius: 12,
     padding: 16,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: '#f3f4f6',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
   },
   dangerItem: {
-    backgroundColor: 'rgba(255, 59, 48, 0.05)',
-    borderColor: 'rgba(255, 59, 48, 0.2)',
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
   },
   settingIcon: {
     marginRight: 16,
     padding: 8,
-    backgroundColor: 'rgba(255, 45, 85, 0.1)',
+    backgroundColor: '#fdf2f8',
     borderRadius: 8,
   },
   settingContent: {
     flex: 1,
   },
   settingTitle: {
-    fontFamily: 'Inter_500Medium',
     fontSize: 16,
-    color: '#fff',
+    fontWeight: '500',
+    color: '#1f2937',
     marginBottom: 2,
   },
   dangerText: {
-    color: '#ff3b30',
+    color: '#ef4444',
   },
   settingDescription: {
-    fontFamily: 'Inter_400Regular',
     fontSize: 14,
-    color: '#999',
+    color: '#6b7280',
     lineHeight: 18,
   },
   settingValue: {
-    fontFamily: 'Inter_500Medium',
     fontSize: 14,
-    color: '#ff2d55',
+    fontWeight: '500',
+    color: '#ec4899',
     marginTop: 2,
   },
   footer: {
@@ -381,10 +770,102 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   footerText: {
-    fontFamily: 'Inter_400Regular',
     fontSize: 14,
-    color: '#666',
+    color: '#9ca3af',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  dialogOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  dialogContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 25,
+    elevation: 25,
+  },
+  dialogTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1f2937',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  dialogSubtitle: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  dialogInput: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    color: '#1f2937',
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  dialogButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  dialogCancelButton: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  dialogCancelText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#6b7280',
+    textAlign: 'center',
+  },
+  dialogConnectButton: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#ec4899',
+  },
+  dialogButtonDisabled: {
+    backgroundColor: '#9ca3af',
+  },
+  dialogConnectText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+    textAlign: 'center',
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

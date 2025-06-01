@@ -1,243 +1,689 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
-import { router } from 'expo-router';
+import React, { useState, useRef } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  ActivityIndicator,
+  Image,
+  StatusBar,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import * as LocalAuthentication from 'expo-local-authentication';
-import { Fingerprint, Lock, Heart } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { 
+  Phone,
+  Mail,
+  Lock,
+  Eye,
+  EyeOff,
+  ArrowRight,
+} from 'lucide-react-native';
+import authService from '../../services/auth';
+import { auth } from '../../config/firebase';
 
-export default function AuthScreen() {
-  const [pin, setPin] = useState('');
-  const [attempts, setAttempts] = useState(0);
-  const [biometricsAvailable, setBiometricsAvailable] = useState(false);
+// Only import recaptcha for mobile platforms
+let FirebaseRecaptchaVerifierModal: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    FirebaseRecaptchaVerifierModal = require('expo-firebase-recaptcha').FirebaseRecaptchaVerifierModal;
+  } catch (error) {
+    console.log('Firebase Recaptcha not available:', error);
+  }
+}
+
+export default function LoginScreen() {
+  // Phone Auth (Primary)
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [otp, setOtp] = useState('');
+  const [verificationId, setVerificationId] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
   
-  // Temporary hardcoded PIN for testing - replace with actual store later
-  const storedPin = '123456';
-  const biometricsEnabled = true;
+  // Email Auth (Secondary)
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginMethod, setLoginMethod] = useState<'phone' | 'email'>(Platform.OS === 'web' ? 'email' : 'phone');
   
-  useEffect(() => {
-    checkBiometrics();
+  const [isLoading, setIsLoading] = useState(false);
+  const recaptchaVerifier = useRef<any>(null);
+  const router = useRouter();
+
+  const formatPhoneNumber = (number: string) => {
+    // Remove all non-digits
+    const digits = number.replace(/\D/g, '');
     
-    // Try to authenticate with biometrics immediately if enabled
-    if (biometricsEnabled) {
-      authenticateWithBiometrics();
+    // If starts with 91, keep as is, otherwise add 91
+    if (digits.startsWith('91')) {
+      return `+${digits}`;
+    } else {
+      return `+91${digits}`;
     }
-  }, []);
-  
-  const checkBiometrics = async () => {
-    const compatible = await LocalAuthentication.hasHardwareAsync();
-    const enrolled = await LocalAuthentication.isEnrolledAsync();
-    setBiometricsAvailable(compatible && enrolled && biometricsEnabled);
   };
-  
-  const authenticateWithBiometrics = async () => {
+
+  const validatePhoneNumber = (number: string) => {
+    const digits = number.replace(/\D/g, '');
+    return digits.length === 10; // Indian mobile numbers are 10 digits
+  };
+
+  const validateEmail = (email: string) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const handleSendOTP = async () => {
+    if (!phoneNumber.trim()) {
+      Alert.alert('Error', 'Please enter your phone number');
+      return;
+    }
+
+    if (!validatePhoneNumber(phoneNumber)) {
+      Alert.alert('Error', 'Please enter a valid 10-digit phone number');
+      return;
+    }
+
+    // For web platform, redirect to email login
+    if (Platform.OS === 'web') {
+      Alert.alert(
+        'Phone Login on Web', 
+        'Phone authentication is not available on web. Please use email login instead.',
+        [
+          { text: 'OK', onPress: () => setLoginMethod('email') }
+        ]
+      );
+      return;
+    }
+
+    const formattedNumber = formatPhoneNumber(phoneNumber);
+    
     try {
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Authenticate to access VaultLove',
-        disableDeviceFallback: false,
-      });
+      setIsLoading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      if (!recaptchaVerifier.current) {
+        throw new Error('reCAPTCHA verifier not initialized');
+      }
+
+      const confirmationResult = await authService.signInWithPhone(
+        formattedNumber, 
+        recaptchaVerifier.current
+      );
       
-      if (result.success) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setVerificationId(confirmationResult.verificationId);
+      setOtpSent(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+      Alert.alert(
+        'OTP Sent! 📱', 
+        `Verification code sent to ${formattedNumber}. Please check your messages.`,
+        [{ text: 'OK' }]
+      );
+    } catch (error: any) {
+      console.error('Send OTP error:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      
+      let message = 'Failed to send OTP. Please try again.';
+      if (error.code === 'auth/invalid-phone-number') {
+        message = 'Please enter a valid phone number.';
+      } else if (error.code === 'auth/too-many-requests') {
+        message = 'Too many attempts. Please try again later.';
+      } else if (error.code === 'auth/network-request-failed') {
+        message = 'Network error. Please check your connection.';
+      } else if (error.message?.includes('reCAPTCHA')) {
+        message = 'reCAPTCHA verification failed. Please try again.';
+      }
+      
+      Alert.alert('Failed to Send OTP', message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyOTP = async () => {
+    if (!otp.trim()) {
+      Alert.alert('Error', 'Please enter the OTP');
+      return;
+    }
+
+    if (otp.length !== 6) {
+      Alert.alert('Error', 'Please enter a valid 6-digit OTP');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      await authService.verifyPhoneCode(verificationId, otp);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+      // Force navigation after successful login
+      setTimeout(() => {
         router.replace('/(tabs)');
-      }
-    } catch (error) {
-      console.log('Biometric authentication error:', error);
-    }
-  };
-  
-  const handleNumberPress = (number: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    
-    if (pin.length < 6) {
-      const newPin = pin + number;
-      setPin(newPin);
+      }, 500);
+    } catch (error: any) {
+      console.error('Verify OTP error:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       
-      if (newPin.length === 6) {
-        // Validate PIN after small delay
-        setTimeout(() => {
-          if (newPin === storedPin) {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            router.replace('/(tabs)');
-          } else {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-            setPin('');
-            setAttempts(attempts + 1);
-            
-            if (attempts + 1 >= 5) {
-              // Lock out after 5 failed attempts
-              Alert.alert(
-                "Too Many Attempts",
-                "Vault is locked. Please try again later.",
-                [{ text: "OK" }]
-              );
-            }
-          }
-        }, 300);
+      let message = 'Invalid OTP. Please try again.';
+      if (error.code === 'auth/invalid-verification-code') {
+        message = 'The verification code is invalid. Please check and try again.';
+      } else if (error.code === 'auth/code-expired') {
+        message = 'The verification code has expired. Please request a new one.';
+      } else if (error.code === 'auth/network-request-failed') {
+        message = 'Network error. Please check your connection.';
       }
+      
+      Alert.alert('Verification Failed', message);
+    } finally {
+      setIsLoading(false);
     }
   };
-  
-  const handleDelete = () => {
+
+  const handleEmailLogin = async () => {
+    if (!email.trim() || !password.trim()) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    if (!validateEmail(email)) {
+      Alert.alert('Error', 'Please enter a valid email address');
+      return;
+    }
+
+    if (password.length < 6) {
+      Alert.alert('Error', 'Password must be at least 6 characters');
+      return;
+    }
+
+    setIsLoading(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setPin(pin.slice(0, -1));
-  };
-  
-  const renderPinDots = () => {
-    return (
-      <View style={styles.dotsContainer}>
-        {[...Array(6)].map((_, index) => (
-          <View 
-            key={index} 
-            style={[
-              styles.dot, 
-              index < pin.length && styles.dotFilled
-            ]} 
-          />
-        ))}
-      </View>
-    );
-  };
-  
-  // Triple tap gesture to panic and close app
-  const handlePanic = () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    // In a real app, you would implement app locking or force quit here
-    Alert.alert("Panic Mode", "Vault locked");
-  };
-  
-  return (
-    <LinearGradient
-      colors={['#0c0c0c', '#090909']}
-      style={styles.container}
-    >
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={handlePanic}
-          style={styles.heartContainer}
-        >
-          <Heart color="#ff2d55" size={32} />
-        </TouchableOpacity>
-        
-        <Text style={styles.title}>VaultLove</Text>
-        <Text style={styles.subtitle}>Enter PIN to unlock</Text>
-        
-        {renderPinDots()}
-        
-        {biometricsAvailable && (
-          <TouchableOpacity
-            style={styles.biometricButton}
-            onPress={authenticateWithBiometrics}
-          >
-            <Fingerprint color="#fff" size={24} />
-            <Text style={styles.biometricText}>Use biometrics</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+
+    try {
+      await authService.signIn(email, password);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       
-      <View style={styles.keypad}>
-        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((number) => (
-          <TouchableOpacity
-            key={number}
-            style={styles.keypadButton}
-            onPress={() => handleNumberPress(number.toString())}
+      // Force navigation after successful login
+      setTimeout(() => {
+        router.replace('/(tabs)');
+      }, 500);
+    } catch (error: any) {
+      console.error('Login error:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      
+      let message = 'Login failed. Please try again.';
+      if (error.code === 'auth/user-not-found') {
+        message = 'No account found with this email. Please sign up first.';
+      } else if (error.code === 'auth/wrong-password') {
+        message = 'Incorrect password. Please try again.';
+      } else if (error.code === 'auth/invalid-email') {
+        message = 'Please enter a valid email address.';
+      } else if (error.code === 'auth/user-disabled') {
+        message = 'This account has been disabled. Please contact support.';
+      } else if (error.code === 'auth/network-request-failed') {
+        message = 'Network error. Please check your connection.';
+      } else if (error.code === 'auth/too-many-requests') {
+        message = 'Too many failed attempts. Please try again later.';
+      }
+      
+      Alert.alert('Login Failed', message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const resetPhoneAuth = () => {
+    setOtpSent(false);
+    setOtp('');
+    setVerificationId('');
+    setPhoneNumber('');
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const goToSignUp = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push('/(auth)/signup');
+  };
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <SafeAreaView style={styles.safeArea}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.keyboardAvoid}
+        >
+          <ScrollView 
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
           >
-            <Text style={styles.keypadButtonText}>{number}</Text>
-          </TouchableOpacity>
-        ))}
-        
-        <View style={styles.keypadButton} />
-        
-        <TouchableOpacity
-          style={styles.keypadButton}
-          onPress={() => handleNumberPress('0')}
-        >
-          <Text style={styles.keypadButtonText}>0</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={styles.keypadButton}
-          onPress={handleDelete}
-        >
-          <Text style={styles.keypadButtonText}>←</Text>
-        </TouchableOpacity>
-      </View>
-    </LinearGradient>
+            {/* Beautiful Illustration */}
+            <View style={styles.illustrationContainer}>
+              <View style={styles.illustrationCard}>
+                <View style={styles.illustrationBackground}>
+                  <View style={styles.coupleIllustration}>
+                    {/* Male figure */}
+                    <View style={styles.maleFigure}>
+                      <View style={styles.maleHair} />
+                      <View style={styles.maleBody} />
+                    </View>
+                    {/* Female figure */}
+                    <View style={styles.femaleFigure}>
+                      <View style={styles.femaleHair} />
+                      <View style={styles.femaleBody} />
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            {/* Welcome Text */}
+            <View style={styles.welcomeContainer}>
+              <Text style={styles.welcomeTitle}>Welcome Back</Text>
+              <Text style={styles.welcomeSubtitle}>
+                Unlock your shared memories with your partner.
+              </Text>
+            </View>
+
+            {/* Main Content */}
+            <View style={styles.contentContainer}>
+              {loginMethod === 'phone' && !otpSent && (
+                <View style={styles.formContainer}>
+                  <View style={styles.inputContainer}>
+                    <View style={styles.inputWrapper}>
+                      <View style={styles.phonePrefix}>
+                        <Text style={styles.phonePrefixText}>🇮🇳 +91</Text>
+                      </View>
+                      <TextInput
+                        style={styles.phoneInput}
+                        placeholder="Enter your phone number"
+                        placeholderTextColor="#9ca3af"
+                        value={phoneNumber}
+                        onChangeText={setPhoneNumber}
+                        keyboardType="phone-pad"
+                        maxLength={10}
+                      />
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.primaryButton, isLoading && styles.primaryButtonDisabled]}
+                    onPress={handleSendOTP}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator color="#ffffff" size="small" />
+                    ) : (
+                      <>
+                        <Text style={styles.primaryButtonText}>Send OTP</Text>
+                        <ArrowRight color="#ffffff" size={20} />
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {loginMethod === 'phone' && otpSent && (
+                <View style={styles.formContainer}>
+                  <Text style={styles.otpTitle}>Verify Your Phone</Text>
+                  <Text style={styles.otpSubtitle}>
+                    Enter the 6-digit code sent to {formatPhoneNumber(phoneNumber)}
+                  </Text>
+
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="Enter OTP"
+                      placeholderTextColor="#9ca3af"
+                      value={otp}
+                      onChangeText={setOtp}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      textAlign="center"
+                    />
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.primaryButton, isLoading && styles.primaryButtonDisabled]}
+                    onPress={handleVerifyOTP}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator color="#ffffff" size="small" />
+                    ) : (
+                      <>
+                        <Text style={styles.primaryButtonText}>Verify</Text>
+                        <ArrowRight color="#ffffff" size={20} />
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity onPress={resetPhoneAuth} style={styles.secondaryButton}>
+                    <Text style={styles.secondaryButtonText}>Change Phone Number</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {loginMethod === 'email' && (
+                <View style={styles.formContainer}>
+                  <View style={styles.inputContainer}>
+                    <View style={styles.inputWrapper}>
+                      <Mail color="#9ca3af" size={20} style={styles.inputIcon} />
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder="Email address"
+                        placeholderTextColor="#9ca3af"
+                        value={email}
+                        onChangeText={setEmail}
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <View style={styles.inputWrapper}>
+                      <Lock color="#9ca3af" size={20} style={styles.inputIcon} />
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder="Password"
+                        placeholderTextColor="#9ca3af"
+                        value={password}
+                        onChangeText={setPassword}
+                        secureTextEntry={!showPassword}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                      />
+                      <TouchableOpacity
+                        onPress={() => setShowPassword(!showPassword)}
+                        style={styles.eyeIcon}
+                      >
+                        {showPassword ? (
+                          <EyeOff color="#9ca3af" size={20} />
+                        ) : (
+                          <Eye color="#9ca3af" size={20} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.primaryButton, isLoading && styles.primaryButtonDisabled]}
+                    onPress={handleEmailLogin}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator color="#ffffff" size="small" />
+                    ) : (
+                      <>
+                        <Text style={styles.primaryButtonText}>Sign In</Text>
+                        <ArrowRight color="#ffffff" size={20} />
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Sign Up Button */}
+              <TouchableOpacity onPress={goToSignUp} style={styles.signupButton}>
+                <Text style={styles.signupButtonText}>
+                  Don't have an account? <Text style={styles.signupButtonHighlight}>Sign Up</Text>
+                </Text>
+              </TouchableOpacity>
+
+              {/* Login Method Toggle */}
+              {!otpSent && (
+                <TouchableOpacity
+                  onPress={() => setLoginMethod(loginMethod === 'phone' ? 'email' : 'phone')}
+                  style={styles.methodToggle}
+                >
+                  <Text style={styles.methodToggleText}>
+                    {loginMethod === 'phone' ? 'Or login with email' : 'Or login with phone'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Recaptcha for mobile */}
+            {Platform.OS !== 'web' && FirebaseRecaptchaVerifierModal && (
+              <FirebaseRecaptchaVerifierModal
+                ref={recaptchaVerifier}
+                firebaseConfig={auth.app.options}
+                attemptInvisibleVerification={true}
+              />
+            )}
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#ffffff',
   },
-  header: {
+  safeArea: {
     flex: 1,
+  },
+  keyboardAvoid: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 40,
+  },
+  illustrationContainer: {
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
+    marginBottom: 40,
   },
-  heartContainer: {
-    marginBottom: 16,
-  },
-  title: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 28,
-    color: '#fff',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 16,
-    color: '#999',
-    marginBottom: 48,
-  },
-  dotsContainer: {
-    flexDirection: 'row',
-    marginTop: 24,
-  },
-  dot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#666',
-    marginHorizontal: 8,
-  },
-  dotFilled: {
-    backgroundColor: '#ff2d55',
-    borderColor: '#ff2d55',
-  },
-  biometricButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 32,
-    padding: 12,
+  illustrationCard: {
+    width: 280,
+    height: 200,
     borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 8,
+    padding: 20,
+    borderWidth: 8,
+    borderColor: '#f3e8e0',
   },
-  biometricText: {
-    fontFamily: 'Inter_400Regular',
-    color: '#fff',
+  illustrationBackground: {
+    flex: 1,
+    backgroundColor: '#f8e5d3',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  coupleIllustration: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  maleFigure: {
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  maleHair: {
+    width: 32,
+    height: 28,
+    backgroundColor: '#3d2914',
+    borderRadius: 16,
+    marginBottom: 2,
+  },
+  maleBody: {
+    width: 40,
+    height: 60,
+    backgroundColor: '#8b6f47',
+    borderRadius: 20,
+  },
+  femaleFigure: {
+    alignItems: 'center',
     marginLeft: 8,
   },
-  keypad: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    padding: 16,
-    marginBottom: 24,
+  femaleHair: {
+    width: 35,
+    height: 35,
+    backgroundColor: '#6b4423',
+    borderRadius: 18,
+    marginBottom: 2,
   },
-  keypadButton: {
-    width: '33%',
-    height: 80,
+  femaleBody: {
+    width: 38,
+    height: 55,
+    backgroundColor: '#e8b4a6',
+    borderRadius: 19,
+  },
+  welcomeContainer: {
+    alignItems: 'center',
+    marginBottom: 40,
+  },
+  welcomeTitle: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  welcomeSubtitle: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 24,
+    paddingHorizontal: 20,
+  },
+  contentContainer: {
+    flex: 1,
+  },
+  formContainer: {
+    marginBottom: 32,
+  },
+  inputContainer: {
+    marginBottom: 20,
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f9fafb',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    paddingHorizontal: 16,
+    height: 56,
+  },
+  inputIcon: {
+    marginRight: 12,
+  },
+  phonePrefix: {
+    paddingRight: 12,
+    borderRightWidth: 1,
+    borderRightColor: '#e5e7eb',
+    marginRight: 12,
+  },
+  phonePrefixText: {
+    fontSize: 16,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  phoneInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1f2937',
+    height: '100%',
+  },
+  textInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1f2937',
+    height: '100%',
+  },
+  eyeIcon: {
+    padding: 4,
+  },
+  primaryButton: {
+    backgroundColor: '#ec4899',
+    borderRadius: 16,
+    height: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#ec4899',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  primaryButtonDisabled: {
+    backgroundColor: '#d1d5db',
+    shadowOpacity: 0,
+  },
+  primaryButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginRight: 8,
+  },
+  secondaryButton: {
+    marginTop: 16,
     alignItems: 'center',
   },
-  keypadButtonText: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 28,
-    color: '#fff',
+  secondaryButtonText: {
+    color: '#6b7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  otpTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1f2937',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  otpSubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 32,
+    lineHeight: 20,
+  },
+  signupButton: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  signupButtonText: {
+    fontSize: 16,
+    color: '#6b7280',
+  },
+  signupButtonHighlight: {
+    color: '#ec4899',
+    fontWeight: '600',
+  },
+  methodToggle: {
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  methodToggleText: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontWeight: '500',
   },
 });

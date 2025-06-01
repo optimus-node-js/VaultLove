@@ -11,8 +11,8 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: '#ff2d55',
-        tabBarInactiveTintColor: '#666',
+        tabBarActiveTintColor: '#ec4899',
+        tabBarInactiveTintColor: '#9ca3af',
         tabBarShowLabel: false,
         tabBarLabelStyle: {
           fontFamily: 'Inter_500Medium',
@@ -21,12 +21,12 @@ export default function TabLayout() {
         tabBarBackground: () => (
           Platform.OS === 'ios' ? (
             <BlurView
-              tint="dark"
+              tint="light"
               intensity={100}
               style={StyleSheet.absoluteFill}
             />
           ) : (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0, 0, 0, 0.95)' }]} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255, 255, 255, 0.95)' }]} />
           )
         ),
       }}
@@ -92,7 +92,8 @@ const styles = StyleSheet.create({
   tabBar: {
     position: 'absolute',
     backgroundColor: 'transparent',
-    borderTopWidth: 0,
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
     elevation: 0,
     height: 70,
     paddingBottom: 10,
@@ -106,6 +107,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   tabIconContainerActive: {
-    backgroundColor: 'rgba(255, 45, 85, 0.1)',
+    backgroundColor: '#fdf2f8',
   },
 });

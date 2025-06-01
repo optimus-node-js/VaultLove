@@ -1,6 +1,6 @@
-import React, { useEffect } from 'react';
-import { Platform } from 'react-native';
-import { Stack } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { Platform, View, ActivityIndicator } from 'react-native';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { 
   useFonts, 
@@ -10,11 +10,19 @@ import {
   Inter_700Bold 
 } from '@expo-google-fonts/inter';
 import * as SplashScreen from 'expo-splash-screen';
+import { User } from 'firebase/auth';
+import authService from '../services/auth';
+import '../config/firebase'; // Initialize Firebase
 
 // Prevent splash screen from auto-hiding
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+  const segments = useSegments();
+
   const [fontsLoaded, fontError] = useFonts({
     'Inter_400Regular': Inter_400Regular,
     'Inter_500Medium': Inter_500Medium,
@@ -27,14 +35,55 @@ export default function RootLayout() {
   });
   
   useEffect(() => {
+    // Set up authentication state listener
+    const unsubscribe = authService.onAuthStateChange((user) => {
+      setUser(user);
+      setIsLoading(false);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     if (fontsLoaded || fontError) {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded, fontError]);
-  
-  // Return null to keep splash screen visible while fonts load
-  if (!fontsLoaded && !fontError) {
-    return null;
+
+  // Handle authentication routing
+  useEffect(() => {
+    if (isLoading) return; // Don't navigate while loading
+
+    const inAuthGroup = segments[0] === '(auth)';
+    const inTabsGroup = segments[0] === '(tabs)';
+
+    if (user) {
+      // User is authenticated
+      if (inAuthGroup) {
+        // Redirect to main app
+        router.replace('/(tabs)');
+      }
+    } else {
+      // User is not authenticated
+      if (inTabsGroup) {
+        // Redirect to auth
+        router.replace('/(auth)');
+      }
+    }
+  }, [user, segments, isLoading]);
+
+  // Show loading screen while checking auth state or loading fonts
+  if (isLoading || (!fontsLoaded && !fontError)) {
+    return (
+      <View style={{ 
+        flex: 1, 
+        backgroundColor: '#ffffff', 
+        justifyContent: 'center', 
+        alignItems: 'center' 
+      }}>
+        <ActivityIndicator size="large" color="#ec4899" />
+      </View>
+    );
   }
 
   return (
@@ -42,14 +91,12 @@ export default function RootLayout() {
       <Stack screenOptions={{ 
         headerShown: false,
         animation: 'fade',
-        contentStyle: { backgroundColor: '#000' }
+        contentStyle: { backgroundColor: '#ffffff' }
       }}>
-        <Stack.Screen name="setup" />
-        <Stack.Screen name="pin-setup" />
-        <Stack.Screen name="(auth)" />
-        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       </Stack>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
     </>
   );
 }

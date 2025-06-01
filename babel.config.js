@@ -6,12 +6,12 @@ module.exports = function (api) {
       [
         'module-resolver',
         {
-          root: ['./'],
-          extensions: ['.ios.js', '.android.js', '.js', '.ts', '.tsx', '.json'],
           alias: {
-            '@': './',
-            app: './app',
-            nanoid: './node_modules/nanoid',
+            '@': './app',
+            'app': './app',
+            'config': './config',
+            'services': './services',
+            'nanoid': './node_modules/nanoid',
           },
         },
       ],
