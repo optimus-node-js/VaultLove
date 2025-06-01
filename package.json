@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "predev": "node fix-expo-router.js",
     "dev": "EXPO_NO_TELEMETRY=1 expo start",
     "build:web": "expo export --platform web",
     "lint": "expo lint"
@@ -36,7 +35,6 @@
     "expo-web-browser": "~14.1.5",
     "firebase": "^10.10.0",
     "lucide-react-native": "^0.475.0",
-    "nanoid": "^3.3.7",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-native": "0.79.1",
@@ -54,7 +52,6 @@
     "@babel/core": "^7.25.2",
     "@types/crypto-js": "^4.2.2",
     "@types/react": "~19.0.10",
-    "babel-plugin-module-resolver": "^5.0.0",
     "typescript": "~5.8.3"
   }
 }
