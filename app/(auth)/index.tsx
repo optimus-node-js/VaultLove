@@ -288,6 +288,11 @@ export default function LoginScreen() {
     router.push('/(auth)/signup');
   };
 
+  const goToForgotPassword = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push('/forgot-password' as any);
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
@@ -450,6 +455,11 @@ export default function LoginScreen() {
                       </TouchableOpacity>
                     </View>
                   </View>
+
+                  {/* Forgot Password Link */}
+                  <TouchableOpacity onPress={goToForgotPassword} style={styles.forgotPasswordButton}>
+                    <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+                  </TouchableOpacity>
 
                   <TouchableOpacity
                     style={[styles.primaryButton, isLoading && styles.primaryButtonDisabled]}
@@ -738,6 +748,15 @@ const styles = StyleSheet.create({
   methodToggleText: {
     fontSize: 14,
     color: '#6b7280',
+    fontWeight: '500',
+  },
+  forgotPasswordButton: {
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  forgotPasswordText: {
+    color: '#6b7280',
+    fontSize: 14,
     fontWeight: '500',
   },
 });

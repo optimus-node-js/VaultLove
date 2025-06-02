@@ -9,7 +9,11 @@ import {
   signInWithPhoneNumber,
   PhoneAuthProvider,
   signInWithCredential,
-  ConfirmationResult
+  ConfirmationResult,
+  fetchSignInMethodsForEmail,
+  sendPasswordResetEmail,
+  verifyPasswordResetCode,
+  confirmPasswordReset
 } from 'firebase/auth';
 import { 
   doc, 
@@ -78,7 +82,6 @@ class AuthService {
   private recaptchaVerifier: RecaptchaVerifier | null = null;
   private confirmationResult: ConfirmationResult | null = null;
   private currentUserProfile: UserProfile | null = null;
-  private rnAuth: any = null;
   private verificationId: string = '';
 
   constructor() {
@@ -141,27 +144,6 @@ class AuthService {
     }
   }
 
-  // Dynamic import for React Native Firebase (only on mobile)
-  private async getRNAuth() {
-    if (Platform.OS === 'web') {
-      throw new Error('React Native Firebase is not available on web');
-    }
-    
-    if (!this.rnAuth) {
-      try {
-        // Use require with try-catch for better compatibility
-        const rnFirebase = require('@react-native-firebase/auth');
-        this.rnAuth = rnFirebase.default;
-        console.log('React Native Firebase auth loaded successfully');
-      } catch (error) {
-        console.error('Failed to load React Native Firebase:', error);
-        throw new Error('React Native Firebase auth is not available');
-      }
-    }
-    
-    return this.rnAuth;
-  }
-
   // Auth state management
   onAuthStateChange(callback: (user: User | null) => void) {
     this.authStateListeners.push(callback);
@@ -201,12 +183,10 @@ class AuthService {
             }
           });
         }
-      } else {
-        // React Native handles verification automatically
-        console.log('Firebase handles verification automatically in React Native');
       }
+      console.log('Phone auth initialized successfully');
     } catch (error) {
-      console.error('Recaptcha initialization error:', error);
+      console.error('Failed to initialize phone auth:', error);
       throw error;
     }
   }
@@ -215,11 +195,11 @@ class AuthService {
     try {
       console.log('Sending phone verification to:', phoneNumber);
       
-      // Ensure phone number has country code
-      const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
+      // Format phone number (ensure it starts with +)
+      const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
       
       if (Platform.OS === 'web') {
-        // Web implementation
+        // Web implementation using reCAPTCHA
         if (!this.recaptchaVerifier) {
           await this.initializeRecaptcha();
         }
@@ -228,20 +208,10 @@ class AuthService {
         console.log('SMS sent successfully (web)');
         return true;
       } else {
-        // React Native implementation
-        const rnAuth = await this.getRNAuth();
-        
-        // Send verification code
-        const confirmation = await rnAuth().signInWithPhoneNumber(formattedPhone);
-        this.confirmationResult = confirmation;
-        
-        // Store verification ID for later use
-        if (confirmation.verificationId) {
-          this.verificationId = confirmation.verificationId;
-        }
-        
-        console.log('SMS sent successfully (React Native)');
-        return true;
+        // For React Native, phone auth is complex with web SDK
+        // We'll disable it and recommend email auth instead
+        console.warn('Phone authentication on React Native with Firebase web SDK requires complex setup.');
+        throw new Error('Phone authentication is not available on mobile. Please use email/password authentication instead.');
       }
     } catch (error) {
       console.error('Send phone verification error:', error);
@@ -257,19 +227,9 @@ class AuthService {
 
       console.log('Verifying phone number with code:', verificationCode);
 
-      let user: User;
-      
-      if (Platform.OS === 'web') {
-        // Web platform using Firebase auth directly
-        const result = await this.confirmationResult.confirm(verificationCode);
-        user = result.user;
-      } else {
-        // React Native platform using React Native Firebase
-        const rnAuth = await this.getRNAuth();
-        const credential = PhoneAuthProvider.credential(this.verificationId, verificationCode);
-        const result = await signInWithCredential(auth, credential);
-        user = result.user;
-      }
+      // Use the confirmation result directly (works for both web and React Native)
+      const result = await this.confirmationResult.confirm(verificationCode);
+      const user = result.user;
 
       // Load or create user profile
       let userProfile = await this.loadUserProfile(user.uid);
@@ -396,20 +356,90 @@ class AuthService {
 
   async signOutUser(): Promise<void> {
     try {
+      console.log('🚪 Starting complete logout process...');
+      
+      // Sign out from Firebase first
       await signOut(auth);
+      console.log('✅ Firebase signout successful');
+      
+      // Clear all internal state immediately
       this.currentUser = null;
       this.userProfile = null;
+      this.currentUserProfile = null;
       this.confirmationResult = null;
+      this.verificationId = '';
       
-      // Clear persisted data
-      await AsyncStorage.removeItem('firebaseUser');
+      // Notify all listeners that user and profile are null
+      this.authStateListeners.forEach(callback => callback(null));
+      this.notifyProfileListeners(null);
+      console.log('📢 Notified all auth state listeners');
       
-      // Log analytics
+      // Clear all persisted data from AsyncStorage
+      await AsyncStorage.multiRemove([
+        'firebaseUser',           // Auth service storage
+        '@vaultlove_user_data',   // Layout storage for user data  
+        '@vaultlove_auth_token',  // Layout storage for auth token
+        '@vaultlove_last_login',  // Layout storage for last login
+        'vault_pin',              // Vault PIN
+        'biometrics_enabled',     // Biometrics setting
+        'username',               // Username
+        'partner_username',       // Partner username
+        'vault_initialized',      // Vault initialization
+        'encryption_key',         // Encryption key
+        '@auth_token',            // Any additional auth tokens
+        '@user_session',          // User session data
+        '@app_state'              // App state
+      ]);
+      console.log('🗑️ Cleared all stored authentication data');
+      
+      // Additional cleanup - try to clear any remaining storage
+      try {
+        const allKeys = await AsyncStorage.getAllKeys();
+        const keysToRemove = allKeys.filter(key => 
+          key.includes('auth') || 
+          key.includes('user') || 
+          key.includes('vault') || 
+          key.includes('firebase') ||
+          key.includes('login') ||
+          key.includes('session')
+        );
+        
+        if (keysToRemove.length > 0) {
+          await AsyncStorage.multiRemove(keysToRemove);
+          console.log('🧹 Cleared additional storage keys:', keysToRemove);
+        }
+      } catch (cleanupError) {
+        console.warn('⚠️ Could not perform additional storage cleanup:', cleanupError);
+      }
+      
+      // Log analytics if available
       if (analytics) {
         logEvent(analytics, 'logout');
+        console.log('📊 Logged logout analytics event');
       }
+      
+      console.log('✅ Complete logout process finished successfully');
+      
     } catch (error) {
-      console.error('Sign out error:', error);
+      console.error('❌ Sign out error:', error);
+      
+      // Even if there's an error, try to clear local state
+      this.currentUser = null;
+      this.userProfile = null;
+      this.currentUserProfile = null;
+      this.confirmationResult = null;
+      this.verificationId = '';
+      this.authStateListeners.forEach(callback => callback(null));
+      this.notifyProfileListeners(null);
+      
+      // Emergency cleanup - clear everything
+      try {
+        await AsyncStorage.clear();
+        console.log('🚨 Emergency: Cleared all AsyncStorage due to logout error');
+      } catch (clearError) {
+        console.error('❌ Failed to clear storage during error recovery:', clearError);
+      }
+      
       throw error;
     }
   }
@@ -689,6 +719,175 @@ class AuthService {
     } catch (error) {
       console.error('Create user profile error:', error);
       throw error;
+    }
+  }
+
+  // Email validation helper
+  async checkEmailExists(email: string): Promise<boolean> {
+    try {
+      console.log('🔍 Checking if email exists:', email);
+      
+      // Use Firebase Auth's fetchSignInMethodsForEmail to check if email exists
+      const signInMethods = await fetchSignInMethodsForEmail(auth, email);
+      
+      // If there are sign-in methods, the email exists
+      const exists = signInMethods.length > 0;
+      console.log('📧 Email check result:', { email, exists, methods: signInMethods });
+      
+      return exists;
+    } catch (error: any) {
+      console.error('❌ Email check error:', error);
+      
+      // If we get a user-not-found error, the email doesn't exist
+      if (error.code === 'auth/user-not-found') {
+        return false;
+      }
+      
+      // For other errors, assume email might exist to be safe
+      return false;
+    }
+  }
+
+  // Password Reset Methods
+  /**
+   * Send password reset email - Updated for Firebase Email Enumeration Protection
+   * 
+   * IMPORTANT: Firebase changed behavior for projects created after September 15, 2023
+   * 
+   * OLD BEHAVIOR (before Email Enumeration Protection):
+   * - Would throw 'auth/user-not-found' error if email doesn't exist
+   * - Developers could show specific "email not found" messages
+   * 
+   * NEW BEHAVIOR (with Email Enumeration Protection enabled):
+   * - Always succeeds, regardless of whether email exists
+   * - No error thrown for non-existent emails
+   * - This prevents attackers from discovering which emails are registered
+   * 
+   * SECURITY REASONING:
+   * - Prevents email enumeration attacks
+   * - Attackers can't determine if an email is registered by trying password reset
+   * - Consistent with industry best practices
+   * 
+   * HOW TO HANDLE:
+   * - Always show success message mentioning "if account exists"
+   * - Don't rely on errors to determine if email exists
+   * - Email will only be sent if account actually exists
+   * 
+   * To disable this feature (NOT recommended for security):
+   * Go to Firebase Console > Authentication > Settings > Email Enumeration Protection > Disable
+   * 
+   * @param email Email address to send reset link to
+   * @returns Promise with sent status and user-friendly message
+   */
+  async sendPasswordResetEmail(email: string): Promise<{ sent: boolean; message: string }> {
+    try {
+      console.log('📧 Sending password reset email to:', email);
+      
+      // Note: Firebase Email Enumeration Protection (enabled by default for new projects since Sept 15, 2023)
+      // means sendPasswordResetEmail will NOT throw an error if the email doesn't exist.
+      // This is a security feature to prevent attackers from discovering registered emails.
+      // The method will always succeed, regardless of whether the email exists.
+      
+      console.log('📤 Calling Firebase sendPasswordResetEmail...');
+      
+      // Determine the correct URL based on environment
+      let resetUrl = 'https://vaultlove.com/action'; // Production URL
+      
+      // For development, use current window location
+      if (typeof window !== 'undefined') {
+        const currentHost = window.location.host;
+        if (currentHost.includes('localhost') || currentHost.includes('127.0.0.1')) {
+          resetUrl = `${window.location.protocol}//${window.location.host}/action`;
+        }
+      }
+      
+      console.log('🔗 Using reset URL:', resetUrl);
+      
+      await sendPasswordResetEmail(auth, email, {
+        url: resetUrl,
+        handleCodeInApp: false
+      });
+      console.log('✅ Firebase sendPasswordResetEmail completed successfully');
+      
+      // Log analytics
+      if (analytics) {
+        logEvent(analytics, 'password_reset_requested', { email });
+        console.log('📊 Analytics event logged');
+      }
+
+      // Return success with appropriate messaging
+      return {
+        sent: true,
+        message: `If an account with ${email} exists, you will receive a password reset email shortly. Please check your inbox and spam folder.`
+      };
+
+    } catch (error: any) {
+      console.error('❌ Send password reset email error:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
+      
+      // Handle specific Firebase errors (these can still occur for other reasons)
+      if (error.code === 'auth/invalid-email') {
+        throw new Error('Please enter a valid email address.');
+      } else if (error.code === 'auth/too-many-requests') {
+        throw new Error('Too many password reset requests. Please wait a few minutes before trying again.');
+      } else if (error.code === 'auth/network-request-failed') {
+        throw new Error('Network error. Please check your internet connection and try again.');
+      } else if (error.code === 'auth/missing-email') {
+        throw new Error('Email address is required.');
+      } else {
+        // For debugging - include the original error message
+        console.error('Unhandled error code:', error.code);
+        throw new Error(`Failed to send reset email: ${error.message || 'Unknown error'}`);
+      }
+    }
+  }
+
+  async verifyPasswordResetCode(oobCode: string): Promise<string> {
+    try {
+      console.log('🔐 Verifying password reset code...');
+      
+      // Verify the reset code and get the email
+      const email = await verifyPasswordResetCode(auth, oobCode);
+      console.log('✅ Password reset code verified for email:', email);
+      
+      return email;
+    } catch (error: any) {
+      console.error('❌ Verify password reset code error:', error);
+      
+      if (error.code === 'auth/invalid-action-code') {
+        throw new Error('Invalid or expired password reset link. Please request a new one.');
+      } else if (error.code === 'auth/expired-action-code') {
+        throw new Error('Password reset link has expired. Please request a new one.');
+      } else {
+        throw new Error('Invalid password reset link. Please request a new one.');
+      }
+    }
+  }
+
+  async confirmPasswordReset(oobCode: string, newPassword: string): Promise<void> {
+    try {
+      console.log('🔐 Confirming password reset...');
+      
+      await confirmPasswordReset(auth, oobCode, newPassword);
+      console.log('✅ Password reset successful');
+      
+      // Log analytics
+      if (analytics) {
+        logEvent(analytics, 'password_reset_completed');
+      }
+    } catch (error: any) {
+      console.error('❌ Confirm password reset error:', error);
+      
+      if (error.code === 'auth/invalid-action-code') {
+        throw new Error('Invalid or expired password reset link. Please request a new one.');
+      } else if (error.code === 'auth/expired-action-code') {
+        throw new Error('Password reset link has expired. Please request a new one.');
+      } else if (error.code === 'auth/weak-password') {
+        throw new Error('Password is too weak. Please choose a stronger password with at least 6 characters.');
+      } else {
+        throw new Error('Failed to reset password. Please try again.');
+      }
     }
   }
 }

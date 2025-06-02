@@ -86,17 +86,33 @@ export default function SignupScreen() {
         return;
       }
 
-      setEmailValidation(prev => ({ ...prev, isChecking: true }));
+      setEmailValidation(prev => ({ ...prev, isChecking: true, message: 'Checking email...' }));
 
-      // For now, we'll just validate email format
-      // Email existence check will be done during actual signup
-      setTimeout(() => {
+      try {
+        // Check if email exists in Firebase
+        const emailExists = await authService.checkEmailExists(formData.email);
+        
+        if (emailExists) {
+          setEmailValidation({
+            isChecking: false,
+            exists: true,
+            message: 'This email is already registered. Please use a different email or try logging in.'
+          });
+        } else {
+          setEmailValidation({
+            isChecking: false,
+            exists: false,
+            message: 'Email is available! ✓'
+          });
+        }
+      } catch (error) {
+        console.error('Email validation error:', error);
         setEmailValidation({
           isChecking: false,
           exists: false,
-          message: 'Email format is valid!'
+          message: 'Unable to verify email. Please try again.'
         });
-      }, 500);
+      }
     };
 
     const timeoutId = setTimeout(checkEmailExists, 1000); // Debounce by 1 second
@@ -125,8 +141,12 @@ export default function SignupScreen() {
       Alert.alert('Error', 'Please enter a valid email address');
       return false;
     }
+    if (emailValidation.isChecking) {
+      Alert.alert('Please Wait', 'We are still checking if this email is available. Please wait a moment and try again.');
+      return false;
+    }
     if (emailValidation.exists) {
-      Alert.alert('Error', 'This email is already registered. Please use a different email or try logging in.');
+      Alert.alert('Email Already Registered', 'This email is already registered. Please use a different email or try logging in.');
       return false;
     }
     if (!formData.phoneNumber.trim()) {
@@ -197,33 +217,46 @@ export default function SignupScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      // Create user with email and password
-      const userCredential = await authService.signUp(formData.email, formData.password, {
-        name: formData.name,
+      // Create user with email and password using the correct SignupData format
+      const signupData = {
+        displayName: formData.name,
+        email: formData.email,
+        password: formData.password,
+        phoneNumber: formData.phoneNumber,
         gender: formData.gender as 'male' | 'female',
         dateOfBirth: formData.dateOfBirth ? formData.dateOfBirth.toISOString() : undefined,
-        phoneNumber: formData.phoneNumber,
+        partnerCode: formData.partnerCode.trim() || undefined,
+      };
+
+      console.log('🚀 Starting signup with data:', { 
+        email: signupData.email, 
+        displayName: signupData.displayName,
+        hasPassword: !!signupData.password,
+        hasPartnerCode: !!signupData.partnerCode
       });
 
-      // If partner code is provided, try to connect
+      const userProfile = await authService.signUp(signupData);
+
+      console.log('✅ Signup successful, user profile created:', userProfile);
+
+      // Show success message based on whether partner connection was attempted
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
       if (formData.partnerCode.trim()) {
-        try {
-          await authService.connectWithPartner(formData.partnerCode.trim().toUpperCase());
+        if (userProfile.partnerStatus === 'connected') {
           Alert.alert(
             'Account Created! 💖',
             'Your account has been created and you\'ve been connected with your partner! Welcome to VaultLove.',
             [{ 
               text: 'Start Your Journey', 
               onPress: () => {
-                // Force navigation after a small delay to ensure auth state updates
                 setTimeout(() => {
                   router.replace('/(tabs)');
                 }, 500);
               }
             }]
           );
-        } catch (partnerError) {
-          console.log('Partner connection failed:', partnerError);
+        } else {
           Alert.alert(
             'Account Created! 💖',
             'Your account has been created successfully, but we couldn\'t connect with the partner code. You can try connecting later from your profile.',
@@ -238,15 +271,12 @@ export default function SignupScreen() {
           );
         }
       } else {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        
-      Alert.alert(
-        'Welcome to VaultLove! 💖',
-        'Your account has been created successfully. You can now start building your precious memories vault.',
+        Alert.alert(
+          'Welcome to VaultLove! 💖',
+          'Your account has been created successfully. You can now start building your precious memories vault.',
           [{ 
             text: 'Get Started', 
             onPress: () => {
-              // Force navigation after a small delay to ensure auth state updates
               setTimeout(() => {
                 router.replace('/(tabs)');
               }, 500);
@@ -255,21 +285,35 @@ export default function SignupScreen() {
         );
       }
     } catch (error: any) {
-      console.error('Signup error:', error);
+      console.error('❌ Signup error:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       
       let message = 'Signup failed. Please try again.';
+      let title = 'Signup Failed';
+      
       if (error.code === 'auth/email-already-in-use') {
-        message = 'An account with this email already exists. Please try logging in instead.';
+        title = 'Email Already Registered';
+        message = 'An account with this email already exists. Please try logging in instead or use a different email address.';
       } else if (error.code === 'auth/weak-password') {
-        message = 'Password is too weak. Please choose a stronger password.';
+        title = 'Password Too Weak';
+        message = 'Password is too weak. Please choose a stronger password with at least 6 characters.';
       } else if (error.code === 'auth/invalid-email') {
+        title = 'Invalid Email';
         message = 'Please enter a valid email address.';
       } else if (error.code === 'auth/network-request-failed') {
-        message = 'Network error. Please check your connection and try again.';
+        title = 'Network Error';
+        message = 'Network error. Please check your internet connection and try again.';
+      } else if (error.code === 'auth/too-many-requests') {
+        title = 'Too Many Attempts';
+        message = 'Too many failed attempts. Please wait a few minutes before trying again.';
+      } else if (error.message && error.message.includes('EMAIL_EXISTS')) {
+        title = 'Email Already Registered';
+        message = 'This email is already registered with VaultLove. Please try logging in instead or use a different email address.';
+      } else if (error.message) {
+        message = error.message;
       }
       
-      Alert.alert('Signup Failed', message);
+      Alert.alert(title, message);
     } finally {
       setIsLoading(false);
     }
@@ -277,7 +321,7 @@ export default function SignupScreen() {
 
   const goToLogin = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.back();
+    router.replace('/(auth)');
   };
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
@@ -325,7 +369,7 @@ export default function SignupScreen() {
         <View style={styles.stepIconContainer}>
           <User color="#ec4899" size={28} />
         </View>
-      <Text style={styles.stepTitle}>Let's get to know you</Text>
+        <Text style={styles.stepTitle}>Let's get to know you</Text>
         <Text style={styles.stepSubtitle}>Tell us your basic information to get started</Text>
       </View>
 
@@ -333,53 +377,69 @@ export default function SignupScreen() {
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <User color="#9ca3af" size={20} style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
+            <TextInput
+              style={styles.input}
               placeholder="Full Name"
               placeholderTextColor="#9ca3af"
-            value={formData.name}
-            onChangeText={(value) => updateFormData('name', value)}
-            autoCapitalize="words"
-            autoCorrect={false}
-          />
+              value={formData.name}
+              onChangeText={(value) => updateFormData('name', value)}
+              autoCapitalize="words"
+              autoCorrect={false}
+            />
           </View>
         </View>
 
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Mail color="#9ca3af" size={20} style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
+            <TextInput
+              style={styles.input}
               placeholder="Email Address"
               placeholderTextColor="#9ca3af"
-            value={formData.email}
-            onChangeText={(value) => updateFormData('email', value)}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+              value={formData.email}
+              onChangeText={(value) => updateFormData('email', value)}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
             {emailValidation.isChecking && (
               <ActivityIndicator color="#9ca3af" size="small" style={styles.validationIcon} />
             )}
           </View>
-          {emailValidation.message && (
+          {emailValidation.message ? (
             <View style={[
               styles.validationMessage,
-              emailValidation.exists ? styles.validationError : styles.validationSuccess
+              emailValidation.exists 
+                ? styles.validationError 
+                : emailValidation.isChecking 
+                  ? styles.validationChecking 
+                  : styles.validationSuccess
             ]}>
-              <AlertCircle 
-                color={emailValidation.exists ? "#ef4444" : "#10b981"} 
-                size={16} 
-                style={styles.validationIcon}
-              />
+              {emailValidation.isChecking ? (
+                <ActivityIndicator 
+                  color="#6b7280" 
+                  size="small" 
+                  style={styles.validationIcon}
+                />
+              ) : (
+                <AlertCircle 
+                  color={emailValidation.exists ? "#ef4444" : "#10b981"} 
+                  size={16} 
+                  style={styles.validationIcon}
+                />
+              )}
               <Text style={[
                 styles.validationText,
-                emailValidation.exists ? styles.validationTextError : styles.validationTextSuccess
+                emailValidation.exists 
+                  ? styles.validationTextError 
+                  : emailValidation.isChecking 
+                    ? styles.validationTextChecking 
+                    : styles.validationTextSuccess
               ]}>
                 {emailValidation.message}
               </Text>
             </View>
-          )}
+          ) : null}
         </View>
 
         <View style={styles.inputContainer}>
@@ -499,59 +559,59 @@ export default function SignupScreen() {
           <Lock color="#ec4899" size={28} />
         </View>
         <Text style={styles.stepTitle}>Secure your account</Text>
-      <Text style={styles.stepSubtitle}>Create a strong password to protect your memories</Text>
+        <Text style={styles.stepSubtitle}>Create a strong password to protect your memories</Text>
       </View>
 
       <View style={styles.form}>
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Lock color="#9ca3af" size={20} style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
+            <TextInput
+              style={styles.input}
               placeholder="Create a strong password"
               placeholderTextColor="#9ca3af"
-            value={formData.password}
-            onChangeText={(value) => updateFormData('password', value)}
-            secureTextEntry={!showPassword}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TouchableOpacity
+              value={formData.password}
+              onChangeText={(value) => updateFormData('password', value)}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
               onPress={() => setShowPassword(!showPassword)}
-            style={styles.eyeIcon}
-          >
-            {showPassword ? (
+              style={styles.eyeIcon}
+            >
+              {showPassword ? (
                 <EyeOff color="#9ca3af" size={20} />
-            ) : (
+              ) : (
                 <Eye color="#9ca3af" size={20} />
-            )}
-          </TouchableOpacity>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
 
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Lock color="#9ca3af" size={20} style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            placeholder="Confirm password"
+            <TextInput
+              style={styles.input}
+              placeholder="Confirm password"
               placeholderTextColor="#9ca3af"
-            value={formData.confirmPassword}
-            onChangeText={(value) => updateFormData('confirmPassword', value)}
-            secureTextEntry={!showConfirmPassword}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TouchableOpacity
+              value={formData.confirmPassword}
+              onChangeText={(value) => updateFormData('confirmPassword', value)}
+              secureTextEntry={!showConfirmPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
               onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-            style={styles.eyeIcon}
-          >
-            {showConfirmPassword ? (
+              style={styles.eyeIcon}
+            >
+              {showConfirmPassword ? (
                 <EyeOff color="#9ca3af" size={20} />
-            ) : (
+              ) : (
                 <Eye color="#9ca3af" size={20} />
-            )}
-          </TouchableOpacity>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -593,9 +653,9 @@ export default function SignupScreen() {
 
             {/* Step Content */}
             <View style={styles.content}>
-            {currentStep === 1 && renderStep1()}
-            {currentStep === 2 && renderStep2()}
-            {currentStep === 3 && renderStep3()}
+              {currentStep === 1 && renderStep1()}
+              {currentStep === 2 && renderStep2()}
+              {currentStep === 3 && renderStep3()}
             </View>
 
             {/* Navigation Buttons */}
@@ -912,5 +972,15 @@ const styles = StyleSheet.create({
   },
   validationTextSuccess: {
     color: '#10b981',
+  },
+  validationChecking: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#fde68a',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 8,
+  },
+  validationTextChecking: {
+    color: '#a16207',
   },
 }); 

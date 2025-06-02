@@ -50,13 +50,14 @@ export default function RootLayout() {
 
         // Set up Firebase auth listener
         const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-          console.log('🔐 Auth state changed:', firebaseUser ? 'logged in' : 'logged out');
+          console.log('🔐 Auth state changed:', firebaseUser ? `logged in as ${firebaseUser.email}` : 'logged out');
           
           setUser(firebaseUser);
           
           if (firebaseUser) {
             try {
               // User is signed in
+              console.log('👤 Loading user profile...');
               
               // Load or create user profile with complete data
               let userProfile = await authService.getUserProfile();
@@ -94,8 +95,11 @@ export default function RootLayout() {
             }
           } else {
             // User is signed out
+            console.log('🚪 User signed out, clearing all data...');
+            setUser(null);
             setUserProfile(null);
             await clearStoredAuthData();
+            console.log('✅ All user data cleared');
           }
           
           // Mark auth state as known after first auth state change
@@ -180,11 +184,13 @@ export default function RootLayout() {
 
     const inAuthGroup = segments[0] === '(auth)';
     const inTabsGroup = segments[0] === '(tabs)';
+    const isAuthenticated = !!(user && userProfile);
 
     console.log('🧭 Navigation check:', { 
       segments, 
       user: !!user, 
       userProfile: !!userProfile,
+      isAuthenticated,
       inAuthGroup,
       inTabsGroup,
       isAuthStateKnown,
@@ -192,16 +198,16 @@ export default function RootLayout() {
       isLoading
     });
 
-    if (!user && !userProfile) {
-      // User is not authenticated
+    if (!isAuthenticated) {
+      // User is not authenticated - force redirect to auth
       if (!inAuthGroup) {
-        console.log('➡️ Redirecting to auth...');
+        console.log('➡️ User not authenticated, redirecting to auth...');
         router.replace('/(auth)');
       }
-    } else if (user || userProfile) {
-      // User is authenticated
+    } else {
+      // User is authenticated - force redirect to main app
       if (inAuthGroup) {
-        console.log('➡️ Redirecting to main app...');
+        console.log('➡️ User authenticated, redirecting to main app...');
         router.replace('/(tabs)');
       }
     }

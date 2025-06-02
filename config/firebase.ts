@@ -1,10 +1,13 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAnalytics, Analytics } from "firebase/analytics";
-import { getAuth, Auth } from "firebase/auth";
 import { getFirestore, Firestore } from "firebase/firestore";
 import { getStorage, FirebaseStorage } from "firebase/storage";
 import { Platform } from 'react-native';
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+
+// Import Firebase Auth with platform-specific logic
+import { initializeAuth, getAuth, Auth } from "firebase/auth";
 
 // Your web app's Firebase configuration
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
@@ -26,8 +29,31 @@ if (getApps().length === 0) {
   app = getApp();
 }
 
-// Initialize Firebase Auth
-const auth: Auth = getAuth(app);
+// Initialize Firebase Auth with proper persistence
+let auth: Auth;
+try {
+  if (Platform.OS === 'web') {
+    // Use regular getAuth for web
+    auth = getAuth(app);
+  } else {
+    // For React Native, try to use initializeAuth with AsyncStorage persistence
+    try {
+      // Import getReactNativePersistence dynamically for React Native
+      const { getReactNativePersistence } = require('firebase/auth');
+      auth = initializeAuth(app, {
+        persistence: getReactNativePersistence(ReactNativeAsyncStorage)
+      });
+    } catch (persistenceError) {
+      console.warn('React Native persistence not available, using default auth:', persistenceError);
+      // Fallback to regular getAuth if persistence setup fails
+      auth = getAuth(app);
+    }
+  }
+} catch (error) {
+  // If already initialized, get the existing instance
+  console.warn('Auth already initialized, using existing instance:', error);
+  auth = getAuth(app);
+}
 
 // Initialize other Firebase services
 export const db: Firestore = getFirestore(app);

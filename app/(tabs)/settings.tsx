@@ -35,6 +35,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import authService, { UserProfile } from '../../services/auth';
 import storageService from '../../services/storage';
+import { performLogout } from '../../utils/authUtils';
 
 export default function SettingsScreen() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -75,10 +76,18 @@ export default function SettingsScreen() {
 
   const loadStorageStats = async () => {
     try {
+      // Only load storage stats if user is authenticated
+      if (!userProfile) {
+        console.log('Skipping storage stats - user not authenticated');
+        return;
+      }
+      
       const stats = await storageService.getStorageStats();
       setStorageStats(stats);
     } catch (error) {
       console.error('Storage stats error:', error);
+      // Don't show error to user, just log it
+      setStorageStats(null);
     }
   };
   
@@ -192,30 +201,22 @@ export default function SettingsScreen() {
     );
   };
   
-  const handleLogout = () => {
-    Alert.alert(
-      "Logout",
-      "Are you sure you want to logout?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Logout",
-          onPress: async () => {
-            try {
-              setIsLoading(true);
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              await authService.signOutUser();
-            } catch (error) {
-              console.error('Logout error:', error);
-              Alert.alert('Error', 'Failed to logout. Please try again.');
-            } finally {
-              setIsLoading(false);
-            }
-          },
-          style: "destructive"
-        }
-      ]
-    );
+  const handleLogout = async () => {
+    await performLogout({
+      showConfirmation: true,
+      showSuccessAlert: true,
+      onSuccess: () => {
+        console.log('🎉 Logout completed successfully from settings screen');
+      },
+      onError: (error) => {
+        console.error('💥 Logout failed from settings screen:', error);
+        Alert.alert(
+          'Logout Error',
+          'There was an issue logging you out. Please try again or restart the app if the problem persists.',
+          [{ text: 'OK' }]
+        );
+      }
+    });
   };
   
   const handleClearVault = () => {
