@@ -99,9 +99,9 @@ export default function SignupScreen() {
             message: 'This email is already registered. Please use a different email or try logging in.'
           });
         } else {
-          setEmailValidation({
-            isChecking: false,
-            exists: false,
+        setEmailValidation({
+          isChecking: false,
+          exists: false,
             message: 'Email is available! ✓'
           });
         }
@@ -271,9 +271,9 @@ export default function SignupScreen() {
           );
         }
       } else {
-        Alert.alert(
-          'Welcome to VaultLove! 💖',
-          'Your account has been created successfully. You can now start building your precious memories vault.',
+      Alert.alert(
+        'Welcome to VaultLove! 💖',
+        'Your account has been created successfully. You can now start building your precious memories vault.',
           [{ 
             text: 'Get Started', 
             onPress: () => {
@@ -369,7 +369,7 @@ export default function SignupScreen() {
         <View style={styles.stepIconContainer}>
           <User color="#ec4899" size={28} />
         </View>
-        <Text style={styles.stepTitle}>Let's get to know you</Text>
+      <Text style={styles.stepTitle}>Let's get to know you</Text>
         <Text style={styles.stepSubtitle}>Tell us your basic information to get started</Text>
       </View>
 
@@ -377,31 +377,31 @@ export default function SignupScreen() {
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <User color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
+          <TextInput
+            style={styles.input}
               placeholder="Full Name"
               placeholderTextColor="#9ca3af"
-              value={formData.name}
-              onChangeText={(value) => updateFormData('name', value)}
-              autoCapitalize="words"
-              autoCorrect={false}
-            />
+            value={formData.name}
+            onChangeText={(value) => updateFormData('name', value)}
+            autoCapitalize="words"
+            autoCorrect={false}
+          />
           </View>
         </View>
 
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Mail color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
+          <TextInput
+            style={styles.input}
               placeholder="Email Address"
               placeholderTextColor="#9ca3af"
-              value={formData.email}
-              onChangeText={(value) => updateFormData('email', value)}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
+            value={formData.email}
+            onChangeText={(value) => updateFormData('email', value)}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
             {emailValidation.isChecking && (
               <ActivityIndicator color="#9ca3af" size="small" style={styles.validationIcon} />
             )}
@@ -422,11 +422,11 @@ export default function SignupScreen() {
                   style={styles.validationIcon}
                 />
               ) : (
-                <AlertCircle 
-                  color={emailValidation.exists ? "#ef4444" : "#10b981"} 
-                  size={16} 
-                  style={styles.validationIcon}
-                />
+              <AlertCircle 
+                color={emailValidation.exists ? "#ef4444" : "#10b981"} 
+                size={16} 
+                style={styles.validationIcon}
+              />
               )}
               <Text style={[
                 styles.validationText,
@@ -559,59 +559,59 @@ export default function SignupScreen() {
           <Lock color="#ec4899" size={28} />
         </View>
         <Text style={styles.stepTitle}>Secure your account</Text>
-        <Text style={styles.stepSubtitle}>Create a strong password to protect your memories</Text>
+      <Text style={styles.stepSubtitle}>Create a strong password to protect your memories</Text>
       </View>
 
       <View style={styles.form}>
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Lock color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
+          <TextInput
+            style={styles.input}
               placeholder="Create a strong password"
               placeholderTextColor="#9ca3af"
-              value={formData.password}
-              onChangeText={(value) => updateFormData('password', value)}
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity
+            value={formData.password}
+            onChangeText={(value) => updateFormData('password', value)}
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity
               onPress={() => setShowPassword(!showPassword)}
-              style={styles.eyeIcon}
-            >
-              {showPassword ? (
+            style={styles.eyeIcon}
+          >
+            {showPassword ? (
                 <EyeOff color="#9ca3af" size={20} />
-              ) : (
+            ) : (
                 <Eye color="#9ca3af" size={20} />
-              )}
-            </TouchableOpacity>
+            )}
+          </TouchableOpacity>
           </View>
         </View>
 
         <View style={styles.inputContainer}>
           <View style={styles.inputWrapper}>
             <Lock color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Confirm password"
+          <TextInput
+            style={styles.input}
+            placeholder="Confirm password"
               placeholderTextColor="#9ca3af"
-              value={formData.confirmPassword}
-              onChangeText={(value) => updateFormData('confirmPassword', value)}
-              secureTextEntry={!showConfirmPassword}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity
+            value={formData.confirmPassword}
+            onChangeText={(value) => updateFormData('confirmPassword', value)}
+            secureTextEntry={!showConfirmPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity
               onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-              style={styles.eyeIcon}
-            >
-              {showConfirmPassword ? (
+            style={styles.eyeIcon}
+          >
+            {showConfirmPassword ? (
                 <EyeOff color="#9ca3af" size={20} />
-              ) : (
+            ) : (
                 <Eye color="#9ca3af" size={20} />
-              )}
-            </TouchableOpacity>
+            )}
+          </TouchableOpacity>
           </View>
         </View>
 
@@ -653,9 +653,9 @@ export default function SignupScreen() {
 
             {/* Step Content */}
             <View style={styles.content}>
-              {currentStep === 1 && renderStep1()}
-              {currentStep === 2 && renderStep2()}
-              {currentStep === 3 && renderStep3()}
+            {currentStep === 1 && renderStep1()}
+            {currentStep === 2 && renderStep2()}
+            {currentStep === 3 && renderStep3()}
             </View>
 
             {/* Navigation Buttons */}

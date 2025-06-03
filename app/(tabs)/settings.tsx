@@ -34,6 +34,7 @@ import {
 } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import authService, { UserProfile } from '../../services/auth';
+import biometricAuthService from '../../services/biometricAuth';
 import storageService from '../../services/storage';
 import { performLogout } from '../../utils/authUtils';
 
@@ -42,6 +43,7 @@ export default function SettingsScreen() {
   const [biometricsEnabled, setBiometricsEnabled] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [isBiometricsAvailable, setIsBiometricsAvailable] = useState(false);
+  const [biometricType, setBiometricType] = useState<string>('Biometric Authentication');
   const [isLoading, setIsLoading] = useState(false);
   const [showPartnerDialog, setShowPartnerDialog] = useState(false);
   const [partnerCode, setPartnerCode] = useState('');
@@ -53,27 +55,53 @@ export default function SettingsScreen() {
   const router = useRouter();
   
   useEffect(() => {
+    let mounted = true;
+    
     // Subscribe to user profile changes
     const unsubscribe = authService.onProfileChange((profile) => {
-      setUserProfile(profile);
+      if (mounted) {
+        setUserProfile(profile);
+      }
     });
 
-    checkBiometricsAvailability();
+    // Initialize biometric settings
+    const initializeBiometrics = async () => {
+      try {
+        const isAvailable = await biometricAuthService.isBiometricAvailable();
+        const isEnabled = await biometricAuthService.isBiometricEnabled();
+        const supportedTypes = await biometricAuthService.getSupportedBiometrics();
+        const typeName = biometricAuthService.getBiometricTypeName(supportedTypes);
+        
+        if (mounted) {
+          setIsBiometricsAvailable(isAvailable);
+          setBiometricsEnabled(isEnabled);
+          setBiometricType(typeName);
+        }
+        
+        console.log('🔐 Biometric settings initialized:', {
+          available: isAvailable,
+          enabled: isEnabled,
+          type: typeName
+        });
+      } catch (error) {
+        console.error('Error initializing biometrics:', error);
+        if (mounted) {
+          setIsBiometricsAvailable(false);
+          setBiometricsEnabled(false);
+        }
+      }
+    };
+
+    initializeBiometrics();
+
     loadStorageStats();
 
-    return unsubscribe;
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
   }, []);
   
-  const checkBiometricsAvailability = async () => {
-    try {
-    const compatible = await LocalAuthentication.hasHardwareAsync();
-    const enrolled = await LocalAuthentication.isEnrolledAsync();
-    setIsBiometricsAvailable(compatible && enrolled);
-    } catch (error) {
-      console.error('Biometrics check error:', error);
-    }
-  };
-
   const loadStorageStats = async () => {
     try {
       // Only load storage stats if user is authenticated
@@ -91,26 +119,109 @@ export default function SettingsScreen() {
     }
   };
   
-  const handleBiometricsToggle = async (value: boolean) => {
-    if (value) {
-      try {
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Verify identity to enable biometrics',
-        disableDeviceFallback: false,
-      });
-      
-      if (result.success) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          setBiometricsEnabled(true);
-          Alert.alert("Success", "Biometric authentication enabled!");
-        }
-      } catch (error) {
-        console.log('Biometric error:', error);
-      }
-    } else {
+  const toggleBiometrics = async () => {
+    try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      setBiometricsEnabled(false);
-      Alert.alert("Disabled", "Biometric authentication disabled.");
+      
+      if (!isBiometricsAvailable) {
+        Alert.alert(
+          'Biometric Authentication Unavailable', 
+          'Your device does not support biometric authentication or you haven\'t set up biometrics yet.'
+        );
+        return;
+      }
+
+      if (biometricsEnabled) {
+        // Disable biometrics
+        Alert.alert(
+          'Disable Biometric Login',
+          `Are you sure you want to disable ${biometricType}? You'll need to enter your email and password to login.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Disable',
+              style: 'destructive',
+              onPress: async () => {
+                try {
+                  await biometricAuthService.disableBiometricAuth();
+                  setBiometricsEnabled(false);
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  console.log('🔐 Biometric authentication disabled');
+                } catch (error) {
+                  console.error('Error disabling biometrics:', error);
+                  Alert.alert('Error', 'Failed to disable biometric authentication');
+                }
+              }
+            }
+          ]
+        );
+      } else {
+        // Enable biometrics
+        Alert.alert(
+          `Enable ${biometricType}`,
+          `Would you like to enable ${biometricType} for quick and secure login to VaultLove?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Enable',
+              onPress: async () => {
+                try {
+                  const currentUser = authService.getCurrentUser();
+                  if (!currentUser?.email) {
+                    Alert.alert('Error', 'Unable to get current user email');
+                    return;
+                  }
+
+                  // For security, we need to ask for the current password
+                  Alert.prompt(
+                    'Confirm Password',
+                    'Please enter your current password to enable biometric authentication:',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Enable',
+                        onPress: async (password) => {
+                          if (!password) {
+                            Alert.alert('Error', 'Password is required');
+                            return;
+                          }
+
+                          try {
+                            // Verify the password first
+                            await authService.signIn(currentUser.email!, password);
+                            
+                            // Enable biometric authentication
+                            const success = await biometricAuthService.enableBiometricAuth(currentUser.email!, password);
+                            
+                            if (success) {
+                              setBiometricsEnabled(true);
+                              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                              // Don't show success message as requested by user
+                              console.log('✅ Biometric authentication enabled successfully');
+                            } else {
+                              Alert.alert('Setup Failed', 'Failed to enable biometric authentication. Please try again.');
+                            }
+                          } catch (error) {
+                            console.error('Error enabling biometrics:', error);
+                            Alert.alert('Error', 'Invalid password or failed to enable biometric authentication');
+                          }
+                        }
+                      }
+                    ],
+                    'secure-text'
+                  );
+                } catch (error) {
+                  console.error('Error in biometric setup:', error);
+                  Alert.alert('Error', 'Failed to enable biometric authentication');
+                }
+              }
+            }
+          ]
+        );
+      }
+    } catch (error) {
+      console.error('Biometrics toggle error:', error);
+      Alert.alert('Error', 'Failed to toggle biometric authentication');
     }
   };
 
@@ -202,21 +313,105 @@ export default function SettingsScreen() {
   };
   
   const handleLogout = async () => {
-    await performLogout({
-      showConfirmation: true,
-      showSuccessAlert: true,
-      onSuccess: () => {
-        console.log('🎉 Logout completed successfully from settings screen');
-      },
-      onError: (error) => {
-        console.error('💥 Logout failed from settings screen:', error);
-        Alert.alert(
-          'Logout Error',
-          'There was an issue logging you out. Please try again or restart the app if the problem persists.',
-          [{ text: 'OK' }]
-        );
-      }
-    });
+    console.log('🎯 Logout button pressed - starting logout process...');
+    
+    // Show confirmation first
+    Alert.alert(
+      "Logout Confirmation 🚪",
+      "Are you sure you want to logout?\n\n• This will clear your session\n• All local data will be removed\n• You'll be redirected to login screen\n\nYour memories are safely stored in the cloud.",
+      [
+        { 
+          text: "Cancel", 
+          style: "cancel",
+          onPress: () => {
+            console.log('❌ User cancelled logout');
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          }
+        },
+        {
+          text: "Yes, Logout",
+          style: "destructive",
+          onPress: async () => {
+            console.log('✅ User confirmed logout - proceeding...');
+            
+            try {
+              // Warning haptic
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              
+              console.log('🔥 Calling authService.signOutUser()...');
+              
+              // Call the auth service logout which handles everything
+              await authService.signOutUser();
+              
+              console.log('✅ AuthService logout completed successfully');
+              
+              // Success haptic
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              
+              // Force navigation immediately - this is the key fix for logout
+              console.log('🧭 Force navigating to auth after logout...');
+              
+              // Simple navigation approach for logout (avoid dismissAll which causes POP_TO_TOP error)
+              try {
+                router.replace('/(auth)');
+                console.log('✅ Primary logout navigation successful');
+              } catch (navError1) {
+                console.error('❌ Primary navigation failed:', navError1);
+                
+                // Emergency navigation even if logout fails
+                try {
+                  router.replace('/(auth)');
+                  console.log('✅ Emergency navigation successful');
+                } catch (emergencyNavError) {
+                  console.error('❌ Emergency navigation failed:', emergencyNavError);
+                  try {
+                    router.replace('/');
+                    console.log('✅ Emergency fallback navigation successful');
+                  } catch (finalError) {
+                    console.error('❌ All emergency navigation failed:', finalError);
+                  }
+                }
+              }
+              
+              // Show success message after navigation attempts
+              setTimeout(() => {
+                Alert.alert(
+                  'Logged Out Successfully! 👋',
+                  'You have been securely logged out. All data cleared from this device.',
+                  [{ text: 'OK' }],
+                  { cancelable: false }
+                );
+              }, 500);
+              
+            } catch (error) {
+              console.error('❌ Logout error:', error);
+              
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+              
+              // Emergency navigation even if logout fails
+              try {
+                router.replace('/(auth)');
+                console.log('✅ Emergency navigation successful');
+              } catch (emergencyNavError) {
+                console.error('❌ Emergency navigation failed:', emergencyNavError);
+                try {
+                  router.replace('/');
+                  console.log('✅ Emergency fallback navigation successful');
+                } catch (finalError) {
+                  console.error('❌ All emergency navigation failed:', finalError);
+                }
+              }
+              
+              Alert.alert(
+                'Logout Error',
+                `Logout failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\nYou have been redirected to login.`,
+                [{ text: 'OK' }]
+              );
+            }
+          }
+        }
+      ]
+    );
   };
   
   const handleClearVault = () => {
@@ -416,7 +611,7 @@ export default function SettingsScreen() {
                 rightComponent={
                 <Switch
                   value={biometricsEnabled}
-                  onValueChange={handleBiometricsToggle}
+                  onValueChange={toggleBiometrics}
                   trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
                   thumbColor="#ffffff"
                 />

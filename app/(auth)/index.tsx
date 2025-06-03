@@ -27,15 +27,8 @@ import {
 import authService, { UserProfile } from '../../services/auth';
 import { auth } from '../../config/firebase';
 
-// Only import recaptcha for mobile platforms
-let FirebaseRecaptchaVerifierModal: any = null;
-if (Platform.OS !== 'web') {
-  try {
-    FirebaseRecaptchaVerifierModal = require('expo-firebase-recaptcha').FirebaseRecaptchaVerifierModal;
-  } catch (error) {
-    console.log('Firebase Recaptcha not available:', error);
-  }
-}
+// Import Firebase Recaptcha for React Native
+import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
 
 export default function LoginScreen() {
   // Phone Auth (Primary)
@@ -71,22 +64,38 @@ export default function LoginScreen() {
     // Remove all non-digits
     const digits = number.replace(/\D/g, '');
     
-    // If starts with 91, keep as is, otherwise add 91
-    if (digits.startsWith('91')) {
+    // Handle different input scenarios
+    if (digits.startsWith('91') && digits.length === 12) {
+      // Already has country code: 91xxxxxxxxxx -> +91xxxxxxxxxx
       return `+${digits}`;
-    } else {
+    } else if (digits.length === 10) {
+      // Just mobile number: xxxxxxxxxx -> +91xxxxxxxxxx
       return `+91${digits}`;
+    } else if (digits.startsWith('0') && digits.length === 11) {
+      // Remove leading 0: 0xxxxxxxxxx -> +91xxxxxxxxxx
+      return `+91${digits.substring(1)}`;
+    } else {
+      // Return as is with + if it seems to have country code
+      return `+${digits}`;
     }
   };
 
   const validatePhoneNumber = (number: string) => {
     const digits = number.replace(/\D/g, '');
-    return digits.length === 10; // Indian mobile numbers are 10 digits
-  };
-
-  const validateEmail = (email: string) => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
+    
+    // Accept these formats:
+    // 1. 10 digits: xxxxxxxxxx
+    // 2. 11 digits starting with 0: 0xxxxxxxxxx  
+    // 3. 12 digits starting with 91: 91xxxxxxxxxx
+    if (digits.length === 10) {
+      return true; // 10 digit mobile number
+    } else if (digits.length === 11 && digits.startsWith('0')) {
+      return true; // 11 digits with leading 0
+    } else if (digits.length === 12 && digits.startsWith('91')) {
+      return true; // 12 digits with country code 91
+    }
+    
+    return false;
   };
 
   const handleSendOTP = async () => {
@@ -96,7 +105,7 @@ export default function LoginScreen() {
     }
 
     if (!validatePhoneNumber(phoneNumber)) {
-      Alert.alert('Error', 'Please enter a valid 10-digit phone number');
+      Alert.alert('Error', 'Please enter a valid phone number (10 digits)');
       return;
     }
 
@@ -113,13 +122,21 @@ export default function LoginScreen() {
     }
 
     const formattedNumber = formatPhoneNumber(phoneNumber);
+    console.log('📱 Original number:', phoneNumber);
+    console.log('📱 Formatted number:', formattedNumber);
 
     try {
       setIsLoading(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
+      // Test Firebase connection first
+      console.log('🔍 Testing Firebase connection...');
+      const connectionTest = await authService.testFirebaseConnection();
+      console.log('🔥 Firebase connection test result:', connectionTest);
+
       console.log('📱 Sending OTP to:', formattedNumber);
-      const success = await authService.sendPhoneVerification(formattedNumber);
+      // Pass the recaptcha verifier for React Native
+      const success = await authService.sendPhoneVerification(formattedNumber, recaptchaVerifier.current);
       
       if (success) {
         setOtpSent(true);
@@ -133,17 +150,23 @@ export default function LoginScreen() {
       }
     } catch (error: any) {
       console.error('Send OTP error:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       
       let message = 'Failed to send OTP. Please try again.';
       if (error.code === 'auth/invalid-phone-number') {
-        message = 'Please enter a valid phone number.';
+        message = `Invalid phone number format. Please check: ${formattedNumber}`;
       } else if (error.code === 'auth/too-many-requests') {
         message = 'Too many attempts. Please try again later.';
       } else if (error.code === 'auth/network-request-failed') {
         message = 'Network error. Please check your connection.';
       } else if (error.message?.includes('reCAPTCHA')) {
         message = 'reCAPTCHA verification failed. Please try again.';
+      } else if (error.message?.includes('timeout')) {
+        message = 'Request timed out. Please check your connection and try again.';
+      } else if (error.message) {
+        message = `Error: ${error.message}`;
       }
       
       Alert.alert('Failed to Send OTP', message);
@@ -275,6 +298,11 @@ export default function LoginScreen() {
     }
   };
 
+  const validateEmail = (email: string) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
   const resetPhoneAuth = () => {
     setOtpSent(false);
     setOtp('');
@@ -291,6 +319,17 @@ export default function LoginScreen() {
   const goToForgotPassword = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push('/forgot-password' as any);
+  };
+
+  // Add test connection function
+  const testFirebaseConnection = async () => {
+    try {
+      console.log('🧪 Testing Firebase connection...');
+      const result = await authService.testFirebaseConnection();
+      Alert.alert('Firebase Test', result ? 'Firebase connection successful!' : 'Firebase connection failed!');
+    } catch (error: any) {
+      Alert.alert('Firebase Test Error', error.message);
+    }
   };
 
   return (
@@ -499,7 +538,7 @@ export default function LoginScreen() {
             </View>
 
             {/* Recaptcha for mobile */}
-            {Platform.OS !== 'web' && FirebaseRecaptchaVerifierModal && (
+            {Platform.OS !== 'web' && (
               <FirebaseRecaptchaVerifierModal
                 ref={recaptchaVerifier}
                 firebaseConfig={auth.app.options}

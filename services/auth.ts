@@ -85,7 +85,10 @@ class AuthService {
   private verificationId: string = '';
 
   constructor() {
-    this.initializeAuth();
+    // Don't await initialization in constructor - let it happen asynchronously
+    this.initializeAuth().catch(error => {
+      console.error('❌ Auth service initialization failed:', error);
+    });
   }
 
   // Utility function to clean data for Firestore (remove undefined values)
@@ -97,50 +100,76 @@ class AuthService {
 
   private async initializeAuth() {
     try {
-      // Check for persisted auth state
-      const persistedUser = await AsyncStorage.getItem('firebaseUser');
+      console.log('🔐 Initializing auth service...');
       
-      onAuthStateChanged(auth, async (user) => {
-        console.log('Auth state changed:', user?.uid || 'logged out');
+      // Set up Firebase auth state listener
+      const unsubscribe = onAuthStateChanged(auth, async (user) => {
+        console.log('🔄 Auth state changed:', user?.uid || 'logged out');
         this.currentUser = user;
         
         if (user) {
-          // Store user info for persistence
-          await AsyncStorage.setItem('firebaseUser', JSON.stringify({
-            uid: user.uid,
-            email: user.email,
-            phoneNumber: user.phoneNumber,
-            displayName: user.displayName
-          }));
-          
-          // Load or create user profile with complete data
-          let userProfile = await this.loadUserProfile(user.uid);
-          
-          if (!userProfile) {
-            console.log('Creating user profile for existing auth user...');
-            // Create profile if it doesn't exist
-            userProfile = await this.createOrUpdateProfile({
+          try {
+            // Store user info for persistence
+            await AsyncStorage.setItem('firebaseUser', JSON.stringify({
               uid: user.uid,
-              email: user.email || undefined,
-              phoneNumber: user.phoneNumber || undefined,
-              displayName: user.displayName || undefined,
-              photoURL: user.photoURL || undefined,
-              partnerStatus: 'no_partner'
+              email: user.email,
+              phoneNumber: user.phoneNumber,
+              displayName: user.displayName
+            }));
+            
+            // Load or create user profile with complete data
+            let userProfile = await this.loadUserProfile(user.uid);
+            
+            if (!userProfile) {
+              console.log('Creating user profile for existing auth user...');
+              // Create profile if it doesn't exist
+              userProfile = await this.createOrUpdateProfile({
+                uid: user.uid,
+                email: user.email || undefined,
+                phoneNumber: user.phoneNumber || undefined,
+                displayName: user.displayName || undefined,
+                photoURL: user.photoURL || undefined,
+                partnerStatus: 'no_partner'
+              });
+            }
+            
+            // Update current profile
+            this.userProfile = userProfile;
+            this.notifyProfileListeners(userProfile);
+            
+            // Notify all listeners about auth state change
+            this.authStateListeners.forEach(callback => callback(user));
+            
+            console.log('✅ User authenticated and profile loaded:', {
+              uid: user.uid,
+              email: user.email,
+              displayName: user.displayName
             });
+            
+          } catch (error) {
+            console.error('❌ Error processing authenticated user:', error);
+            // Don't sign out on profile error, just clear profile
+            this.userProfile = null;
+            this.notifyProfileListeners(null);
+            this.authStateListeners.forEach(callback => callback(user));
           }
-          
-          // Notify all listeners about auth state change
-          this.authStateListeners.forEach(callback => callback(user));
         } else {
           // Clear persisted data on sign out
           await AsyncStorage.removeItem('firebaseUser');
           this.userProfile = null;
           this.notifyProfileListeners(null);
           this.authStateListeners.forEach(callback => callback(null));
+          
+          console.log('✅ User signed out, cleared all data');
         }
       });
+      
+      console.log('✅ Auth service initialized successfully');
+      return unsubscribe;
+      
     } catch (error) {
-      console.error('Auth initialization error:', error);
+      console.error('❌ Auth initialization error:', error);
+      throw error;
     }
   }
 
@@ -191,12 +220,16 @@ class AuthService {
     }
   }
 
-  async sendPhoneVerification(phoneNumber: string): Promise<boolean> {
+  async sendPhoneVerification(phoneNumber: string, recaptchaVerifier?: any): Promise<boolean> {
     try {
-      console.log('Sending phone verification to:', phoneNumber);
+      console.log('🔍 Starting phone verification process...');
+      console.log('📱 Phone number:', phoneNumber);
+      console.log('🤖 Platform:', Platform.OS);
+      console.log('🔐 reCAPTCHA verifier provided:', !!recaptchaVerifier);
       
       // Format phone number (ensure it starts with +)
       const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+      console.log('✅ Formatted phone:', formattedPhone);
       
       if (Platform.OS === 'web') {
         // Web implementation using reCAPTCHA
@@ -204,17 +237,65 @@ class AuthService {
           await this.initializeRecaptcha();
         }
         
+        console.log('🌐 Using web reCAPTCHA verifier');
         this.confirmationResult = await signInWithPhoneNumber(auth, formattedPhone, this.recaptchaVerifier!);
-        console.log('SMS sent successfully (web)');
+        console.log('✅ SMS sent successfully (web)');
+        console.log('🆔 Verification ID:', this.confirmationResult?.verificationId);
         return true;
       } else {
-        // For React Native, phone auth is complex with web SDK
-        // We'll disable it and recommend email auth instead
-        console.warn('Phone authentication on React Native with Firebase web SDK requires complex setup.');
-        throw new Error('Phone authentication is not available on mobile. Please use email/password authentication instead.');
+        // React Native implementation using expo-firebase-recaptcha
+        if (!recaptchaVerifier) {
+          throw new Error('reCAPTCHA verifier is required for phone authentication on mobile');
+        }
+        
+        console.log('📱 Using React Native reCAPTCHA verifier');
+        console.log('🔍 Calling signInWithPhoneNumber...');
+        
+        // Add timeout to catch hanging requests
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Phone verification timeout after 30 seconds')), 30000)
+        );
+        
+        const verificationPromise = signInWithPhoneNumber(auth, formattedPhone, recaptchaVerifier);
+        
+        this.confirmationResult = await Promise.race([verificationPromise, timeoutPromise]) as any;
+        
+        console.log('✅ signInWithPhoneNumber completed');
+        console.log('🆔 Verification ID:', this.confirmationResult?.verificationId);
+        console.log('📧 Confirmation result type:', typeof this.confirmationResult);
+        console.log('🔍 Confirmation result keys:', Object.keys(this.confirmationResult || {}));
+        
+        // Verify the confirmation result has the expected structure
+        if (!this.confirmationResult || !this.confirmationResult.verificationId) {
+          console.error('❌ Invalid confirmation result structure:', this.confirmationResult);
+          throw new Error('Invalid confirmation result received from Firebase');
+        }
+        
+        console.log('✅ SMS sent successfully (React Native)');
+        return true;
       }
-    } catch (error) {
-      console.error('Send phone verification error:', error);
+    } catch (error: any) {
+      console.error('❌ Send phone verification error:', error);
+      console.error('❌ Error code:', error.code);
+      console.error('❌ Error message:', error.message);
+      console.error('❌ Full error object:', JSON.stringify(error, null, 2));
+      
+      // Check for specific Firebase Auth errors
+      if (error.code) {
+        switch (error.code) {
+          case 'auth/invalid-phone-number':
+            throw new Error(`Invalid phone number format: ${phoneNumber}`);
+          case 'auth/too-many-requests':
+            throw new Error('Too many requests. Please try again later.');
+          case 'auth/captcha-check-failed':
+            throw new Error('reCAPTCHA verification failed. Please try again.');
+          case 'auth/quota-exceeded':
+            throw new Error('SMS quota exceeded. Please try again later.');
+          default:
+            throw new Error(this.getPhoneAuthErrorMessage(error));
+        }
+      }
+      
       throw new Error(this.getPhoneAuthErrorMessage(error));
     }
   }
@@ -228,7 +309,7 @@ class AuthService {
       console.log('Verifying phone number with code:', verificationCode);
 
       // Use the confirmation result directly (works for both web and React Native)
-      const result = await this.confirmationResult.confirm(verificationCode);
+        const result = await this.confirmationResult.confirm(verificationCode);
       const user = result.user;
 
       // Load or create user profile
@@ -320,10 +401,21 @@ class AuthService {
 
   async signIn(email: string, password: string): Promise<UserProfile> {
     try {
-      console.log('Signing in user:', email);
+      console.log('🔐 Starting sign in process...');
+      console.log('📧 Email:', email);
+      console.log('🌐 Platform:', Platform.OS);
+      console.log('🔥 Auth domain:', auth.app.options.authDomain);
+      console.log('🆔 Project ID:', auth.app.options.projectId);
       
       const result = await signInWithEmailAndPassword(auth, email, password);
       const user = result.user;
+
+      console.log('✅ Firebase sign in successful:', {
+        uid: user.uid,
+        email: user.email,
+        emailVerified: user.emailVerified,
+        providerData: user.providerData
+      });
 
       // Load user profile
       let userProfile = await this.loadUserProfile(user.uid);
@@ -348,8 +440,38 @@ class AuthService {
       }
 
       return userProfile;
-    } catch (error) {
-      console.error('Sign in error:', error);
+    } catch (error: any) {
+      console.error('❌ Sign in error details:', {
+        code: error.code,
+        message: error.message,
+        email: email,
+        platform: Platform.OS,
+        authDomain: auth.app.options.authDomain
+      });
+      
+      // Add specific handling for common mobile auth errors
+      if (error.code === 'auth/invalid-credential') {
+        console.log('🔍 Invalid credential error - this could mean:');
+        console.log('1. Wrong email/password combination');
+        console.log('2. User doesn\'t exist in this Firebase project');
+        console.log('3. Email/password authentication not enabled');
+        console.log('4. Account might be disabled');
+        
+        // Try to check if email exists
+        try {
+          const signInMethods = await fetchSignInMethodsForEmail(auth, email);
+          console.log('📧 Sign-in methods for email:', signInMethods);
+          
+          if (signInMethods.length === 0) {
+            console.log('⚠️ No sign-in methods found for this email - user might not exist');
+          } else {
+            console.log('✅ Email exists, password might be wrong');
+          }
+        } catch (emailCheckError) {
+          console.log('❌ Could not check email methods:', emailCheckError);
+        }
+      }
+      
       throw error;
     }
   }
@@ -889,6 +1011,45 @@ class AuthService {
         throw new Error('Failed to reset password. Please try again.');
       }
     }
+  }
+
+  // Add this method after the sendPhoneVerification method
+  async testFirebaseConnection(): Promise<boolean> {
+    try {
+      console.log('🔍 Testing Firebase connection...');
+      console.log('🔥 Auth domain:', auth.app.options.authDomain);
+      console.log('🆔 Project ID:', auth.app.options.projectId);
+      console.log('🌐 API Key present:', !!auth.app.options.apiKey);
+      
+      // Test if Firebase is properly initialized
+      const currentUser = auth.currentUser;
+      console.log('👤 Current user:', currentUser?.uid || 'No user');
+      
+      return true;
+    } catch (error) {
+      console.error('❌ Firebase connection test failed:', error);
+      return false;
+    }
+  }
+
+  // Method to send phone verification with test number support
+  async sendPhoneVerificationWithTesting(phoneNumber: string, recaptchaVerifier?: any): Promise<boolean> {
+    // Check if it's a test number (you should set up test numbers in Firebase console)
+    const testNumbers = [
+      '+1 650-555-3434', // US test number
+      '+91 9999999999',  // India test number (you can set this up)
+    ];
+    
+    if (testNumbers.includes(phoneNumber)) {
+      console.log('📞 Using test phone number:', phoneNumber);
+      console.log('⚠️ This is a test number. In Firebase console, make sure to:');
+      console.log('1. Go to Authentication > Sign-in method');
+      console.log('2. Enable Phone authentication');
+      console.log('3. Add this number in "Phone numbers for testing"');
+      console.log('4. Set verification code to: 123456');
+    }
+    
+    return this.sendPhoneVerification(phoneNumber, recaptchaVerifier);
   }
 }
 

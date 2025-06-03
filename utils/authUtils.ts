@@ -36,17 +36,25 @@ export const performLogout = async (options?: {
       // Success haptic feedback
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       
-      // Force navigation with multiple attempts
+      // Force navigation with multiple attempts using the correct route paths
       console.log('🧭 Forcing navigation to login...');
       
       const navigateToAuth = () => {
         try {
-          router.replace('/(auth)');
-          console.log('✅ Navigation successful');
+          // Try different navigation approaches based on Expo Router best practices
+          router.replace('/'); // Navigate to root auth screen
+          console.log('✅ Navigation to root successful');
           return true;
         } catch (error) {
-          console.error('❌ Navigation failed:', error);
-          return false;
+          console.error('❌ Navigation to root failed:', error);
+          try {
+            router.replace('/(auth)'); // Fallback to auth group
+            console.log('✅ Navigation to auth group successful');
+            return true;
+          } catch (error2) {
+            console.error('❌ Navigation to auth group failed:', error2);
+            return false;
+          }
         }
       };
       
@@ -55,13 +63,20 @@ export const performLogout = async (options?: {
         // Retry after short delay
         setTimeout(() => {
           if (!navigateToAuth()) {
-            // Final attempt with push
+            // Final attempt with push and different paths
             setTimeout(() => {
               try {
-                router.push('/(auth)');
-                console.log('✅ Push navigation successful');
+                router.push('/');
+                console.log('✅ Push navigation to root successful');
               } catch (error) {
                 console.error('❌ All navigation attempts failed:', error);
+                // Emergency: try to force a complete app restart navigation
+                try {
+                  router.dismissAll();
+                  router.replace('/');
+                } catch (emergencyError) {
+                  console.error('❌ Emergency navigation failed:', emergencyError);
+                }
               }
             }, 100);
           }
@@ -96,11 +111,15 @@ export const performLogout = async (options?: {
       
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       
-      // Emergency navigation
+      // Emergency navigation - try multiple approaches
       try {
-        router.replace('/(auth)');
+        router.replace('/');
       } catch (navError) {
-        console.error('❌ Emergency navigation failed:', navError);
+        try {
+          router.replace('/(auth)');
+        } catch (navError2) {
+          console.error('❌ All emergency navigation attempts failed:', navError2);
+        }
       }
       
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -112,7 +131,7 @@ export const performLogout = async (options?: {
           text: 'OK', 
           onPress: () => {
             try {
-              router.replace('/(auth)');
+              router.replace('/');
             } catch (e) {
               console.error('Error recovery navigation failed:', e);
             }
@@ -154,6 +173,15 @@ export const emergencyLogout = async (): Promise<void> => {
   try {
     console.log('🚨 Emergency logout initiated');
     await authService.signOutUser();
+    
+    // Force immediate navigation
+    try {
+      router.dismissAll();
+      router.replace('/');
+    } catch (navError) {
+      router.replace('/(auth)');
+    }
+    
     console.log('✅ Emergency logout completed');
   } catch (error) {
     console.error('❌ Emergency logout failed:', error);
@@ -161,6 +189,14 @@ export const emergencyLogout = async (): Promise<void> => {
     try {
       await AsyncStorage.clear();
       console.log('🚨 Emergency: Cleared all AsyncStorage');
+      
+      // Force navigation even if auth failed
+      try {
+        router.dismissAll();
+        router.replace('/');
+      } catch (navError) {
+        router.replace('/(auth)');
+      }
     } catch (clearError) {
       console.error('❌ Emergency storage clear failed:', clearError);
     }

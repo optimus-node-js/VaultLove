@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, ActivityIndicator, StatusBar } from 'react-native';
+import { View, ActivityIndicator, StatusBar, Platform } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
@@ -7,6 +7,7 @@ import * as Font from 'expo-font';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import authService, { UserProfile } from '../services/auth';
+import biometricAuthService from '../services/biometricAuth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Prevent the splash screen from auto-hiding
@@ -25,6 +26,8 @@ export default function RootLayout() {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthStateKnown, setIsAuthStateKnown] = useState(false);
   const [initialAuthCheckComplete, setInitialAuthCheckComplete] = useState(false);
+  const [biometricCheckComplete, setBiometricCheckComplete] = useState(false);
+  const [isBiometricEnabled, setIsBiometricEnabled] = useState(false);
   const router = useRouter();
   const segments = useSegments();
 
@@ -40,6 +43,30 @@ export default function RootLayout() {
 
         // Check for stored user data first
         const hasStoredAuth = await checkStoredAuthData();
+        
+        // Check if biometric authentication is enabled
+        const biometricEnabled = await biometricAuthService.isBiometricEnabled();
+        setIsBiometricEnabled(biometricEnabled);
+        
+        console.log('🔐 Biometric enabled:', biometricEnabled);
+        
+        if (biometricEnabled) {
+          console.log('🔐 Attempting biometric auto-login...');
+          try {
+            const biometricResult = await biometricAuthService.authenticateWithBiometrics();
+            if (biometricResult.success && biometricResult.userInfo) {
+              console.log('✅ Biometric auto-login successful, signing in...');
+              // Automatically sign in with stored credentials
+              await authService.signIn(biometricResult.userInfo.email, biometricResult.userInfo.password);
+            } else {
+              console.log('❌ Biometric auto-login failed:', biometricResult.error);
+            }
+          } catch (error) {
+            console.error('❌ Biometric auto-login error:', error);
+          }
+        }
+        
+        setBiometricCheckComplete(true);
         
         // If we have stored auth data, mark auth state as known immediately
         if (hasStoredAuth) {
@@ -199,22 +226,88 @@ export default function RootLayout() {
     });
 
     if (!isAuthenticated) {
-      // User is not authenticated - force redirect to auth
+      // User is not authenticated - redirect to auth
       if (!inAuthGroup) {
         console.log('➡️ User not authenticated, redirecting to auth...');
-        router.replace('/(auth)');
+        try {
+          router.replace('/(auth)');
+          console.log('✅ Navigation to /(auth) successful');
+        } catch (error) {
+          console.error('❌ Navigation to /(auth) failed:', error);
+          // Fallback navigation
+          try {
+            router.replace('/');
+            console.log('✅ Fallback navigation to / successful');
+          } catch (fallbackError) {
+            console.error('❌ All navigation attempts failed:', fallbackError);
+          }
+        }
       }
     } else {
-      // User is authenticated - force redirect to main app
+      // User is authenticated - redirect to main app
       if (inAuthGroup) {
         console.log('➡️ User authenticated, redirecting to main app...');
-        router.replace('/(tabs)');
+        try {
+          router.replace('/(tabs)');
+          console.log('✅ Navigation to /(tabs) successful');
+        } catch (error) {
+          console.error('❌ Navigation to /(tabs) failed:', error);
+        }
       }
     }
   }, [user, userProfile, segments, isReady, isLoading, isAuthStateKnown, initialAuthCheckComplete]);
 
+  // Additional effect for logout detection - more aggressive
+  useEffect(() => {
+    if (!isReady || !initialAuthCheckComplete) return;
+    
+    const isCurrentlyAuthenticated = !!(user && userProfile);
+    
+    // If user is not authenticated and we're in the tabs section, redirect immediately
+    if (!isCurrentlyAuthenticated && isAuthStateKnown && segments[0] === '(tabs)') {
+      console.log('🚨 Logout detected! Force redirecting to auth...');
+      
+      // Simple navigation without dismissAll to avoid POP_TO_TOP error
+      const forceNavigation = () => {
+        try {
+          router.replace('/(auth)');
+          console.log('✅ Immediate logout navigation successful');
+        } catch (error1) {
+          console.error('❌ Immediate navigation failed:', error1);
+          try {
+            router.replace('/');
+            console.log('✅ Fallback immediate navigation successful');
+          } catch (error2) {
+            console.error('❌ All immediate navigation attempts failed:', error2);
+            // Last resort - force page reload on web
+            if (Platform.OS === 'web' && typeof window !== 'undefined') {
+              console.log('🔄 Force reloading page as last resort...');
+              window.location.href = '/';
+            }
+          }
+        }
+      };
+      
+      // Try immediate navigation
+      forceNavigation();
+      
+      // Also try with a small delay as backup
+      setTimeout(forceNavigation, 50);
+    }
+    
+    // Also handle the case where we're authenticated but somehow on auth pages
+    if (isCurrentlyAuthenticated && segments[0] === '(auth)') {
+      console.log('✅ User authenticated but on auth page, redirecting to app...');
+      try {
+        router.replace('/(tabs)');
+      } catch (error) {
+        console.error('❌ Auth-to-app navigation failed:', error);
+      }
+    }
+  }, [user, userProfile, isAuthStateKnown, segments, isReady, initialAuthCheckComplete]);
+
   // Show loading screen while initializing or waiting for auth state
-  if (!isReady || !initialAuthCheckComplete || isLoading) {
+  if (!isReady || !initialAuthCheckComplete || isLoading || !biometricCheckComplete) {
     return (
       <SafeAreaProvider>
         <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
