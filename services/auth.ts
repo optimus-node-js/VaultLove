@@ -45,6 +45,9 @@ export interface UserProfile {
   partnerCode?: string;
   createdAt?: any;
   updatedAt?: any;
+  connectedAt?: any;
+  disconnectedAt?: any;
+  codeGeneratedAt?: any;
 }
 
 export interface SignupData {
@@ -632,7 +635,10 @@ class AuthService {
           partnerStatus: userData.partnerStatus || 'no_partner',
           partnerCode: userData.partnerCode,
           createdAt: userData.createdAt,
-          updatedAt: userData.updatedAt
+          updatedAt: userData.updatedAt,
+          connectedAt: userData.connectedAt,
+          disconnectedAt: userData.disconnectedAt,
+          codeGeneratedAt: userData.codeGeneratedAt
         };
         
         console.log('User profile loaded successfully:', {
@@ -661,14 +667,75 @@ class AuthService {
         throw new Error('User must be authenticated');
       }
 
-      // Implementation for partner connection logic
-      // This would search for users with the given partner code
-      console.log('Connecting with partner code:', partnerCode);
+      console.log('🔍 Searching for partner with code:', partnerCode);
+
+      // Search for a user with this partner code
+      const usersRef = collection(db, 'users');
+      const partnerQuery = query(
+        usersRef,
+        where('partnerCode', '==', partnerCode),
+        where('partnerStatus', '==', 'pending')
+      );
+
+      const partnerSnapshot = await getDocs(partnerQuery);
+
+      if (partnerSnapshot.empty) {
+        throw new Error('Invalid partner code or partner not found');
+      }
+
+      const partnerDoc = partnerSnapshot.docs[0];
+      const partnerData = partnerDoc.data();
+      const partnerId = partnerDoc.id;
+
+      if (partnerId === this.currentUser.uid) {
+        throw new Error('You cannot connect to yourself');
+      }
+
+      console.log('✅ Partner found:', partnerData.displayName);
+
+      // Update both users to connected status
+      const batch = [];
       
-      // For now, just update the partner code
-      await this.updateProfile({ partnerCode });
+      // Update current user
+      batch.push(updateDoc(doc(db, 'users', this.currentUser.uid), {
+        partnerId: partnerId,
+        partnerStatus: 'connected',
+        partnerCode: null, // Clear the code
+        connectedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }));
+
+      // Update partner
+      batch.push(updateDoc(doc(db, 'users', partnerId), {
+        partnerId: this.currentUser.uid,
+        partnerStatus: 'connected',
+        partnerCode: null, // Clear the code
+        connectedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }));
+
+      // Execute all updates
+      await Promise.all(batch);
+
+      // Initialize chat for the couple
+      // Note: Chat initialization will happen automatically when user profile changes
+      // const { default: chatService } = await import('./chat');
+      // await chatService.initializeChatForCouple(this.currentUser.uid, partnerId);
+
+      // Update local profile
+      await this.loadUserProfile(this.currentUser.uid);
+
+      console.log('💑 Successfully connected with partner!');
+      
+      // Log analytics
+      if (analytics) {
+        logEvent(analytics, 'partner_connected', {
+          user_id: this.currentUser.uid,
+          partner_id: partnerId
+        });
+      }
     } catch (error) {
-      console.error('Partner connection error:', error);
+      console.error('❌ Partner connection failed:', error);
       throw error;
     }
   }
@@ -679,20 +746,35 @@ class AuthService {
         throw new Error('User must be authenticated');
       }
 
-      // Generate a unique partner code
+      // Generate a unique 6-character partner code
       const partnerCode = Math.random().toString(36).substring(2, 8).toUpperCase();
       
-      console.log('Generated partner code:', partnerCode);
+      console.log('🔗 Generated partner code:', partnerCode);
       
+      // Check if code already exists (very unlikely but possible)
+      const existingCodeQuery = query(
+        collection(db, 'users'),
+        where('partnerCode', '==', partnerCode)
+      );
+      const existingSnapshot = await getDocs(existingCodeQuery);
+      
+      if (!existingSnapshot.empty) {
+        // Recursively generate a new code if this one exists
+        return this.generatePartnerConnection();
+      }
+
       // Update user profile with the partner code and pending status
       await this.updateProfile({ 
         partnerCode,
-        partnerStatus: 'pending'
+        partnerStatus: 'pending',
+        codeGeneratedAt: serverTimestamp()
       });
+
+      console.log('✅ Partner connection code ready for sharing');
 
       return partnerCode;
     } catch (error) {
-      console.error('Generate partner connection error:', error);
+      console.error('❌ Generate partner connection failed:', error);
       throw error;
     }
   }
@@ -703,18 +785,51 @@ class AuthService {
         throw new Error('User must be authenticated');
       }
 
-      console.log('Disconnecting from partner...');
-      
-      // Update user profile to remove partner connection
-      await this.updateProfile({ 
-        partnerCode: undefined,
-        partnerId: undefined,
-        partnerStatus: 'no_partner'
-      });
+      const partnerId = this.userProfile.partnerId;
+      if (!partnerId) {
+        throw new Error('No partner connected');
+      }
 
-      console.log('Successfully disconnected from partner');
+      console.log('💔 Disconnecting from partner...');
+      
+      // Update both users to remove connection
+      const batch = [];
+      
+      // Update current user
+      batch.push(updateDoc(doc(db, 'users', this.currentUser.uid), {
+        partnerId: null,
+        partnerStatus: 'no_partner',
+        partnerCode: null,
+        disconnectedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }));
+
+      // Update partner
+      batch.push(updateDoc(doc(db, 'users', partnerId), {
+        partnerId: null,
+        partnerStatus: 'no_partner',
+        partnerCode: null,
+        disconnectedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }));
+
+      // Execute all updates
+      await Promise.all(batch);
+
+      // Update local profile
+      await this.loadUserProfile(this.currentUser.uid);
+
+      console.log('✅ Successfully disconnected from partner');
+      
+      // Log analytics
+      if (analytics) {
+        logEvent(analytics, 'partner_disconnected', {
+          user_id: this.currentUser.uid,
+          partner_id: partnerId
+        });
+      }
     } catch (error) {
-      console.error('Disconnect partner error:', error);
+      console.error('❌ Partner disconnection failed:', error);
       throw error;
     }
   }

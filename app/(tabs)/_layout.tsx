@@ -1,6 +1,6 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
-import { Grid2x2 as Grid, Upload, Settings } from 'lucide-react-native';
+import { Grid2x2 as Grid, MessageCircle, Settings } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { BlurView } from 'expo-blur';
 import { Platform, StyleSheet, View } from 'react-native';
@@ -50,15 +50,15 @@ export default function TabLayout() {
       />
       
       <Tabs.Screen
-        name="upload"
+        name="chat"
         options={{
-          title: 'Upload',
+          title: 'Chat',
           tabBarIcon: ({ color, size, focused }) => (
             <View style={[styles.tabIconContainer, focused && styles.tabIconContainerActive]}>
-              <Upload size={focused ? size + 2 : size} color={color} />
+              <MessageCircle size={focused ? size + 2 : size} color={color} />
             </View>
           ),
-          tabBarAccessibilityLabel: 'Upload',
+          tabBarAccessibilityLabel: 'Chat',
         }}
         listeners={{
           tabPress: () => {
