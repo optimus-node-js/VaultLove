@@ -9,7 +9,9 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
-  Clipboard
+  Clipboard,
+  Modal,
+  Share
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -17,6 +19,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { 
   CircleUser as UserCircle, 
   Users, 
+  User,
   Fingerprint, 
   Lock, 
   Shield, 
@@ -30,13 +33,18 @@ import {
   UserPlus,
   CheckCircle,
   Clock,
-  XCircle
+  XCircle,
+  X,
+  Link,
+  Unlink,
+  AlertCircle
 } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import authService, { UserProfile } from '../../services/auth';
 import biometricAuthService from '../../services/biometricAuth';
 import storageService from '../../services/storage';
 import { performLogout } from '../../utils/authUtils';
+import { StatusBar } from 'expo-status-bar';
 
 export default function SettingsScreen() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -52,15 +60,43 @@ export default function SettingsScreen() {
     fileCount: number;
     mediaByType: Record<string, number>;
   } | null>(null);
+  const [partnerInfo, setPartnerInfo] = useState<{
+    partnerId?: string;
+    partnerName?: string;
+    partnerPhotoURL?: string;
+    status: string;
+  } | null>(null);
+
+  // Modal states
+  const [showPartnerModal, setShowPartnerModal] = useState(false);
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [showGenerateModal, setShowGenerateModal] = useState(false);
+
+  // Form states
+  const [generatedCode, setGeneratedCode] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+
+  // Settings states
+  const [autoSync, setAutoSync] = useState(true);
+  const [shareLocation, setShareLocation] = useState(false);
   const router = useRouter();
   
   useEffect(() => {
     let mounted = true;
     
     // Subscribe to user profile changes
-    const unsubscribe = authService.onProfileChange((profile) => {
+    const unsubscribeProfile = authService.onProfileChange((profile) => {
       if (mounted) {
         setUserProfile(profile);
+      }
+    });
+
+    // Subscribe to partner status changes
+    const unsubscribePartner = authService.onPartnerStatusChange((info) => {
+      if (mounted) {
+        setPartnerInfo(info);
       }
     });
 
@@ -98,7 +134,8 @@ export default function SettingsScreen() {
 
     return () => {
       mounted = false;
-      unsubscribe();
+      unsubscribeProfile();
+      unsubscribePartner();
     };
   }, []);
   
@@ -225,70 +262,65 @@ export default function SettingsScreen() {
     }
   };
 
-  const generatePartnerCode = async () => {
-    if (!userProfile) return;
-
+  const handleGenerateCode = async () => {
     try {
-      setIsLoading(true);
+      setIsGenerating(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      
+
       const code = await authService.generatePartnerConnection();
-      
-      Alert.alert(
-        'Partner Code Generated! 💕',
-        `Your partner code is: ${code}\n\nShare this code with your partner to connect your vaults. The code will expire in 24 hours.`,
-        [
-          {
-            text: 'Copy Code',
-            onPress: () => {
-              Clipboard.setString(code);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              Alert.alert('Copied!', 'Partner code copied to clipboard');
-            }
-          },
-          { text: 'OK' }
-        ]
-      );
+      setGeneratedCode(code);
+      setShowGenerateModal(true);
+
+      console.log('✅ Partner code generated:', code);
     } catch (error) {
-      console.error('Generate partner code error:', error);
-      Alert.alert('Error', 'Failed to generate partner code. Please try again.');
+      console.error('❌ Generate code error:', error);
+      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to generate partner code');
     } finally {
-      setIsLoading(false);
+      setIsGenerating(false);
     }
   };
 
-  const connectWithPartner = async () => {
+  const handleConnectWithCode = async () => {
     if (!partnerCode.trim()) {
       Alert.alert('Error', 'Please enter a partner code');
       return;
     }
 
     try {
-      setIsLoading(true);
+      setIsConnecting(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      
+
+      // First run the test to see what's happening
+      console.log('🔍 Running connection test first...');
+      await authService.testPartnerConnection(partnerCode.trim().toUpperCase());
+
+      console.log('🔍 Now attempting actual connection...');
       await authService.connectWithPartner(partnerCode.trim().toUpperCase());
+      
+      setShowConnectModal(false);
+      setPartnerCode('');
       
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert(
-        'Connected! 💖',
-        'You are now connected with your partner. You can now share your vault and create memories together!',
-        [{ text: 'Amazing!', onPress: () => setShowPartnerDialog(false) }]
+        'Connected! 💕',
+        'You are now connected to your partner. All your memories will be shared automatically.',
+        [{ text: 'Awesome!', onPress: () => {} }]
       );
-      setPartnerCode('');
-    } catch (error: any) {
-      console.error('Connect partner error:', error);
+      
+      console.log('✅ Successfully connected to partner');
+    } catch (error) {
+      console.error('❌ Connect error:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Connection Failed', error.message || 'Please check the code and try again.');
+      Alert.alert('Connection Failed', error instanceof Error ? error.message : 'Failed to connect with partner');
     } finally {
-      setIsLoading(false);
+      setIsConnecting(false);
     }
   };
 
-  const disconnectPartner = async () => {
+  const handleDisconnectPartner = async () => {
     Alert.alert(
       'Disconnect Partner',
-      'Are you sure you want to disconnect from your partner? You will no longer share your vault.',
+      'Are you sure you want to disconnect from your partner? This will stop sharing memories and you will only see your own content.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -296,13 +328,97 @@ export default function SettingsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              setIsLoading(true);
+              setIsDisconnecting(true);
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
               await authService.disconnectPartner();
+              
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               Alert.alert('Disconnected', 'You have been disconnected from your partner.');
+              
+              console.log('✅ Successfully disconnected from partner');
             } catch (error) {
-              console.error('Disconnect error:', error);
-              Alert.alert('Error', 'Failed to disconnect. Please try again.');
+              console.error('❌ Disconnect error:', error);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+              Alert.alert('Error', 'Failed to disconnect from partner');
+            } finally {
+              setIsDisconnecting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await Clipboard.setString(text);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      Alert.alert('Copied!', 'Partner code copied to clipboard');
+    } catch (error) {
+      console.error('Copy error:', error);
+    }
+  };
+
+  const sharePartnerCode = async (code: string) => {
+    try {
+      await Share.share({
+        message: `Hi! Use this code to connect with me on VaultLove and share our precious memories: ${code}`,
+        title: 'VaultLove Partner Code',
+      });
+    } catch (error) {
+      console.error('Share error:', error);
+    }
+  };
+
+  const formatStorageDisplay = (stats: { totalSize: number; fileCount: number }) => {
+    const size = stats.totalSize;
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let unitIndex = 0;
+    let sizeValue = size;
+    
+    while (sizeValue >= 1024 && unitIndex < units.length - 1) {
+      sizeValue /= 1024;
+      unitIndex++;
+    }
+    
+    return `${sizeValue.toFixed(1)} ${units[unitIndex]}`;
+  };
+
+  const handleClearVault = async () => {
+    Alert.alert(
+      'Clear All Memories',
+      'This will permanently delete all your memories and cannot be undone. Are you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert('Feature Coming Soon', 'Clear vault functionality will be available in a future update.');
+          }
+        }
+      ]
+    );
+  };
+
+  const handleLogout = async () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsLoading(true);
+              await performLogout();
+              // Navigation will be handled by auth state change
+            } catch (error) {
+              console.error('Logout error:', error);
+              Alert.alert('Error', 'Failed to logout. Please try again.');
             } finally {
               setIsLoading(false);
             }
@@ -311,205 +427,211 @@ export default function SettingsScreen() {
       ]
     );
   };
-  
-  const handleLogout = async () => {
-    console.log('🎯 Logout button pressed - starting logout process...');
-    
-    // Show confirmation first
-    Alert.alert(
-      "Logout Confirmation 🚪",
-      "Are you sure you want to logout?\n\n• This will clear your session\n• All local data will be removed\n• You'll be redirected to login screen\n\nYour memories are safely stored in the cloud.",
-      [
-        { 
-          text: "Cancel", 
-          style: "cancel",
-          onPress: () => {
-            console.log('❌ User cancelled logout');
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          }
-        },
-        {
-          text: "Yes, Logout",
-          style: "destructive",
-          onPress: async () => {
-            console.log('✅ User confirmed logout - proceeding...');
-            
-            try {
-              // Warning haptic
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              
-              console.log('🔥 Calling authService.signOutUser()...');
-              
-              // Call the auth service logout which handles everything
-              await authService.signOutUser();
-              
-              console.log('✅ AuthService logout completed successfully');
-              
-              // Success haptic
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              
-              // Force navigation immediately - this is the key fix for logout
-              console.log('🧭 Force navigating to auth after logout...');
-              
-              // Simple navigation approach for logout (avoid dismissAll which causes POP_TO_TOP error)
-              try {
-                router.replace('/(auth)');
-                console.log('✅ Primary logout navigation successful');
-              } catch (navError1) {
-                console.error('❌ Primary navigation failed:', navError1);
-                
-                // Emergency navigation even if logout fails
-                try {
-                  router.replace('/(auth)');
-                  console.log('✅ Emergency navigation successful');
-                } catch (emergencyNavError) {
-                  console.error('❌ Emergency navigation failed:', emergencyNavError);
-                  try {
-                    router.replace('/');
-                    console.log('✅ Emergency fallback navigation successful');
-                  } catch (finalError) {
-                    console.error('❌ All emergency navigation failed:', finalError);
-                  }
-                }
-              }
-              
-              // Show success message after navigation attempts
-              setTimeout(() => {
-                Alert.alert(
-                  'Logged Out Successfully! 👋',
-                  'You have been securely logged out. All data cleared from this device.',
-                  [{ text: 'OK' }],
-                  { cancelable: false }
-                );
-              }, 500);
-              
-            } catch (error) {
-              console.error('❌ Logout error:', error);
-              
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-              
-              // Emergency navigation even if logout fails
-              try {
-                router.replace('/(auth)');
-                console.log('✅ Emergency navigation successful');
-              } catch (emergencyNavError) {
-                console.error('❌ Emergency navigation failed:', emergencyNavError);
-                try {
-                  router.replace('/');
-                  console.log('✅ Emergency fallback navigation successful');
-                } catch (finalError) {
-                  console.error('❌ All emergency navigation failed:', finalError);
-                }
-              }
-              
-              Alert.alert(
-                'Logout Error',
-                `Logout failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\nYou have been redirected to login.`,
-                [{ text: 'OK' }]
-              );
-            }
-          }
-        }
-      ]
-    );
-  };
-  
-  const handleClearVault = () => {
-    Alert.alert(
-      "Clear Vault",
-      "Are you sure you want to delete all memories? This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete All",
-          onPress: () => {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-              Alert.alert("Success", "All memories have been deleted.");
-          },
-          style: "destructive"
-        }
-      ]
-    );
-  };
 
-  const formatStorageDisplay = (stats: { totalSize: number; fileCount: number } | null): string => {
-    if (!stats) return 'Loading...';
-    const totalAvailable = 5 * 1024 * 1024 * 1024; // 5GB limit
-    const used = formatFileSize(stats.totalSize);
-    const total = formatFileSize(totalAvailable);
-    const percentage = Math.round((stats.totalSize / totalAvailable) * 100);
-    return `${used} / ${total} (${percentage}% used)`;
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const getPartnerStatusIcon = () => {
-    switch (userProfile?.partnerStatus) {
-      case 'connected':
-        return <CheckCircle color="#10b981" size={20} />;
-      case 'pending':
-        return <Clock color="#f59e0b" size={20} />;
-      default:
-        return <XCircle color="#6b7280" size={20} />;
-    }
-  };
-
-  const getPartnerStatusText = () => {
-    switch (userProfile?.partnerStatus) {
-      case 'connected':
-        return 'Connected';
-      case 'pending':
-        return 'Code Generated (Pending)';
-      default:
-        return 'Not Connected';
-    }
-  };
-  
-  const SettingItem = ({ 
-    icon, 
-    title, 
-    description, 
-    value, 
-    onPress, 
-    isDanger = false,
-    rightComponent 
-  }: {
+  // SettingItem Component
+  interface SettingItemProps {
     icon: React.ReactNode;
     title: string;
     description?: string;
     value?: string;
     onPress?: () => void;
-    isDanger?: boolean;
     rightComponent?: React.ReactNode;
+    isDanger?: boolean;
+  }
+
+  const SettingItem: React.FC<SettingItemProps> = ({
+    icon,
+    title,
+    description,
+    value,
+    onPress,
+    rightComponent,
+    isDanger = false
   }) => (
-    <TouchableOpacity 
-      style={[styles.settingItem, isDanger && styles.dangerItem]}
+    <TouchableOpacity
+      style={[styles.settingItem, isDanger && styles.settingItemDanger]}
       onPress={onPress}
-      disabled={!onPress}
       activeOpacity={onPress ? 0.7 : 1}
     >
-      <View style={styles.settingIcon}>
+      <View style={styles.settingItemIcon}>
         {icon}
       </View>
-      <View style={styles.settingContent}>
-        <Text style={[styles.settingTitle, isDanger && styles.dangerText]}>
+      <View style={styles.settingItemContent}>
+        <Text style={[styles.settingItemTitle, isDanger && styles.settingItemTitleDanger]}>
           {title}
         </Text>
         {description && (
-          <Text style={styles.settingDescription}>{description}</Text>
+          <Text style={styles.settingItemDescription}>
+            {description}
+          </Text>
         )}
         {value && (
-          <Text style={styles.settingValue}>{value}</Text>
+          <Text style={styles.settingItemValue}>
+            {value}
+          </Text>
         )}
       </View>
-      {rightComponent}
+      {rightComponent && (
+        <View style={styles.settingItemRight}>
+          {rightComponent}
+        </View>
+      )}
+      {onPress && !rightComponent && (
+        <View style={styles.settingItemArrow}>
+          <Text style={styles.settingArrowText}>›</Text>
+        </View>
+      )}
     </TouchableOpacity>
+  );
+
+  const getPartnerStatusInfo = () => {
+    if (!userProfile) return null;
+
+    switch (userProfile.partnerStatus) {
+      case 'connected':
+        return {
+          icon: CheckCircle,
+          color: '#10b981',
+          text: 'Connected',
+          description: `Connected to ${partnerInfo?.partnerName || 'Partner'}`,
+        };
+      case 'pending':
+        return {
+          icon: Clock,
+          color: '#f59e0b',
+          text: 'Pending',
+          description: 'Waiting for partner to connect',
+        };
+      case 'no_partner':
+      default:
+        return {
+          icon: AlertCircle,
+          color: '#6b7280',
+          text: 'Not Connected',
+          description: 'Connect with your partner to share memories',
+        };
+    }
+  };
+
+  const statusInfo = getPartnerStatusInfo();
+
+  const renderPartnerSection = () => (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Heart color="#ec4899" size={24} />
+        <Text style={styles.sectionTitle}>Partner Connection</Text>
+      </View>
+
+      {statusInfo && (
+        <View style={styles.statusContainer}>
+          <View style={styles.statusRow}>
+            <View style={styles.statusIconContainer}>
+              <statusInfo.icon color={statusInfo.color} size={20} />
+            </View>
+            <View style={styles.statusText}>
+              <Text style={styles.statusTitle}>{statusInfo.text}</Text>
+              <Text style={styles.statusDescription}>{statusInfo.description}</Text>
+            </View>
+          </View>
+        </View>
+      )}
+
+      <View style={styles.partnerActions}>
+        {userProfile?.partnerStatus === 'connected' ? (
+          <>
+            <TouchableOpacity
+              style={styles.partnerButton}
+              onPress={() => setShowPartnerModal(true)}
+            >
+              <Users color="#ec4899" size={20} />
+              <Text style={styles.partnerButtonText}>Manage Partnership</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={styles.partnerButton}
+              onPress={() => setShowConnectModal(true)}
+            >
+              <Link color="#ec4899" size={20} />
+              <Text style={styles.partnerButtonText}>Connect with Partner</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.partnerButton, styles.generateButton]}
+              onPress={handleGenerateCode}
+              disabled={isGenerating}
+            >
+              {isGenerating ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <Copy color="#ffffff" size={20} />
+              )}
+              <Text style={styles.generateButtonText}>
+                {isGenerating ? 'Generating...' : 'Generate Code to Share'}
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
+    </View>
+  );
+
+  const renderSettingsSection = () => (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Info color="#6b7280" size={24} />
+        <Text style={styles.sectionTitle}>App Settings</Text>
+      </View>
+
+      <View style={styles.settingRow}>
+        <View style={styles.settingInfo}>
+          <Bell color="#6b7280" size={20} />
+          <View style={styles.settingText}>
+            <Text style={styles.settingTitle}>Push Notifications</Text>
+            <Text style={styles.settingDescription}>Get notified of partner activity</Text>
+          </View>
+        </View>
+        <Switch
+          value={notificationsEnabled}
+          onValueChange={(value) => {
+            setNotificationsEnabled(value);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          }}
+          trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
+          thumbColor="#ffffff"
+        />
+      </View>
+
+      <View style={styles.settingRow}>
+        <View style={styles.settingInfo}>
+          <Clock color="#6b7280" size={20} />
+          <View style={styles.settingText}>
+            <Text style={styles.settingTitle}>Auto Sync</Text>
+            <Text style={styles.settingDescription}>Automatically sync with partner</Text>
+          </View>
+        </View>
+        <Switch
+          value={autoSync}
+          onValueChange={setAutoSync}
+          trackColor={{ false: '#e5e7eb', true: '#ec4899' }}
+          thumbColor="#ffffff"
+        />
+      </View>
+
+      <View style={styles.settingRow}>
+        <View style={styles.settingInfo}>
+          <Shield color="#6b7280" size={20} />
+          <View style={styles.settingText}>
+            <Text style={styles.settingTitle}>Privacy & Security</Text>
+            <Text style={styles.settingDescription}>Manage your data protection</Text>
+          </View>
+        </View>
+        <View style={styles.settingArrow}>
+          <Text style={styles.settingArrowText}>›</Text>
+        </View>
+      </View>
+    </View>
   );
 
   // Show loading if no user profile
@@ -524,6 +646,7 @@ export default function SettingsScreen() {
   
   return (
     <View style={styles.container}>
+      <StatusBar style="dark" />
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
           <Heart color="#ec4899" size={24} />
@@ -537,67 +660,12 @@ export default function SettingsScreen() {
             
             <SettingItem
               icon={<UserCircle color="#ec4899" size={24} />}
-              title="Your Name"
+              title={userProfile?.email ||"Your Name"}
               value={userProfile?.displayName || 'Not set'}
-              description={userProfile?.email || 'No email'}
+              
             />
 
-            <SettingItem
-              icon={getPartnerStatusIcon()}
-              title="Partner Connection"
-              value={getPartnerStatusText()}
-              description={
-                userProfile?.partnerStatus === 'connected' 
-                  ? 'Sharing vault with your partner'
-                  : userProfile?.partnerStatus === 'pending'
-                  ? 'Partner code active - waiting for connection'
-                  : 'Connect with your partner to share memories'
-              }
-              onPress={() => {
-                if (!userProfile) return;
-                
-                if (userProfile.partnerStatus === 'connected') {
-                  // Show disconnect option
-                  Alert.alert(
-                    'Partner Connected',
-                    'You are connected with your partner. What would you like to do?',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Disconnect', onPress: disconnectPartner, style: 'destructive' }
-                    ]
-                  );
-                } else if (userProfile.partnerStatus === 'pending') {
-                  // Show code again
-                  Alert.alert(
-                    'Partner Code Active',
-                    `Your partner code: ${userProfile.partnerCode}\n\nShare this with your partner to connect.`,
-                    [
-                      {
-                        text: 'Copy Code',
-                        onPress: () => {
-                          if (userProfile.partnerCode) {
-                            Clipboard.setString(userProfile.partnerCode);
-                            Alert.alert('Copied!', 'Partner code copied to clipboard');
-                          }
-                        }
-                      },
-                      { text: 'OK' }
-                    ]
-                  );
-                } else {
-                  // Show connection options
-                  Alert.alert(
-                    'Connect with Partner',
-                    'Choose how to connect with your partner',
-                    [
-                      { text: 'Generate Code', onPress: generatePartnerCode },
-                      { text: 'Enter Code', onPress: () => setShowPartnerDialog(true) },
-                      { text: 'Cancel', style: 'cancel' }
-                    ]
-                  );
-                }
-              }}
-            />
+            {renderPartnerSection()}
           </View>
           
           <View style={styles.section}>
@@ -695,6 +763,8 @@ export default function SettingsScreen() {
             />
           </View>
           
+          {renderSettingsSection()}
+          
           <View style={styles.footer}>
             <Text style={styles.footerText}>
               Made with 💖 for couples who cherish their memories
@@ -702,51 +772,161 @@ export default function SettingsScreen() {
           </View>
         </ScrollView>
 
-        {/* Partner Code Input Dialog */}
-        {showPartnerDialog && (
-          <View style={styles.dialogOverlay}>
-            <View style={styles.dialogContainer}>
-              <Text style={styles.dialogTitle}>Connect with Partner</Text>
-              <Text style={styles.dialogSubtitle}>
-                Enter the partner code shared by your loved one
+        {/* Connect with Code Modal */}
+        <Modal
+          visible={showConnectModal}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowConnectModal(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Connect with Partner</Text>
+                <TouchableOpacity
+                  style={styles.modalCloseButton}
+                  onPress={() => setShowConnectModal(false)}
+                >
+                  <X color="#6b7280" size={24} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.modalDescription}>
+                Enter the 6-character code your partner shared with you
               </Text>
-              
+
               <TextInput
-                style={styles.dialogInput}
-                placeholder="Enter partner code (e.g. ALEX-1234)"
-                placeholderTextColor="#9ca3af"
+                style={styles.codeInput}
                 value={partnerCode}
-                onChangeText={setPartnerCode}
+                onChangeText={(text) => setPartnerCode(text.toUpperCase())}
+                placeholder="ABCD12"
+                placeholderTextColor="#9ca3af"
+                maxLength={6}
                 autoCapitalize="characters"
                 autoCorrect={false}
               />
-              
-              <View style={styles.dialogButtons}>
+
+              <TouchableOpacity
+                style={[styles.connectButton, !partnerCode.trim() && styles.connectButtonDisabled]}
+                onPress={handleConnectWithCode}
+                disabled={isConnecting || !partnerCode.trim()}
+              >
+                {isConnecting ? (
+                  <ActivityIndicator color="#ffffff" size="small" />
+                ) : (
+                  <Text style={styles.connectButtonText}>Connect</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Generated Code Modal */}
+        <Modal
+          visible={showGenerateModal}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowGenerateModal(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Partner Code Generated!</Text>
                 <TouchableOpacity
-                  style={styles.dialogCancelButton}
-                  onPress={() => {
-                    setShowPartnerDialog(false);
-                    setPartnerCode('');
-                  }}
+                  style={styles.modalCloseButton}
+                  onPress={() => setShowGenerateModal(false)}
                 >
-                  <Text style={styles.dialogCancelText}>Cancel</Text>
+                  <X color="#6b7280" size={24} />
                 </TouchableOpacity>
-                
+              </View>
+
+              <Text style={styles.modalDescription}>
+                Share this code with your partner to connect your accounts
+              </Text>
+
+              <View style={styles.generatedCodeContainer}>
+                <Text style={styles.generatedCode}>{generatedCode}</Text>
+              </View>
+
+              <Text style={styles.codeNote}>
+                This code will expire in 24 hours
+              </Text>
+
+              <View style={styles.shareActions}>
                 <TouchableOpacity
-                  style={[styles.dialogConnectButton, isLoading && styles.dialogButtonDisabled]}
-                  onPress={connectWithPartner}
-                  disabled={isLoading}
+                  style={styles.shareButton}
+                  onPress={() => copyToClipboard(generatedCode)}
                 >
-                  {isLoading ? (
-                    <ActivityIndicator color="#fff" size="small" />
-                  ) : (
-                    <Text style={styles.dialogConnectText}>Connect</Text>
-                  )}
+                  <Copy color="#ec4899" size={20} />
+                  <Text style={styles.shareButtonText}>Copy</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.shareButton, styles.shareButtonPrimary]}
+                  onPress={() => sharePartnerCode(generatedCode)}
+                >
+                  <Copy color="#ffffff" size={20} />
+                  <Text style={styles.shareButtonPrimaryText}>Share</Text>
                 </TouchableOpacity>
               </View>
             </View>
           </View>
-        )}
+        </Modal>
+
+        {/* Partner Management Modal */}
+        <Modal
+          visible={showPartnerModal}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowPartnerModal(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Partner Management</Text>
+                <TouchableOpacity
+                  style={styles.modalCloseButton}
+                  onPress={() => setShowPartnerModal(false)}
+                >
+                  <X color="#6b7280" size={24} />
+                </TouchableOpacity>
+              </View>
+
+              {partnerInfo && (
+                <View style={styles.partnerInfoContainer}>
+                  <View style={styles.partnerDetails}>
+                    <View style={styles.partnerAvatar}>
+                      <User color="#6b7280" size={24} />
+                    </View>
+                    <View style={styles.partnerText}>
+                      <Text style={styles.partnerName}>{partnerInfo.partnerName}</Text>
+                      <Text style={styles.partnerStatus}>Connected Partner</Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={styles.disconnectButton}
+                onPress={handleDisconnectPartner}
+                disabled={isDisconnecting}
+              >
+                {isDisconnecting ? (
+                  <ActivityIndicator color="#ffffff" size="small" />
+                ) : (
+                  <>
+                    <Unlink color="#ffffff" size={20} />
+                    <Text style={styles.disconnectButtonText}>Disconnect Partner</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <Text style={styles.disconnectNote}>
+                Disconnecting will stop sharing memories with your partner. You can reconnect anytime.
+              </Text>
+            </View>
+          </View>
+        </Modal>
 
         {isLoading && (
           <View style={styles.loadingOverlay}>
@@ -963,5 +1143,286 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.8)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  modalCloseButton: {
+    padding: 4,
+  },
+  modalDescription: {
+    fontSize: 16,
+    color: '#6b7280',
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  codeInput: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 18,
+    fontWeight: '600',
+    textAlign: 'center',
+    letterSpacing: 4,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  connectButton: {
+    backgroundColor: '#ec4899',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectButtonDisabled: {
+    backgroundColor: '#d1d5db',
+  },
+  connectButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  generatedCodeContainer: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  generatedCode: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#ec4899',
+    letterSpacing: 8,
+  },
+  codeNote: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  shareActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  shareButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  shareButtonPrimary: {
+    backgroundColor: '#ec4899',
+    borderColor: '#ec4899',
+  },
+  shareButtonPrimaryText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginLeft: 8,
+  },
+  partnerInfoContainer: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+  },
+  partnerDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  partnerAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#e5e7eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  partnerText: {
+    flex: 1,
+  },
+  partnerName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  partnerStatus: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  disconnectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ef4444',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  disconnectButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginLeft: 8,
+  },
+  disconnectNote: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  statusContainer: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusIconContainer: {
+    marginRight: 12,
+  },
+  statusText: {
+    flex: 1,
+  },
+  statusTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  statusDescription: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  partnerActions: {
+    gap: 12,
+  },
+  partnerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#fdf2f8',
+    borderWidth: 1,
+    borderColor: '#f3e8ff',
+  },
+  partnerButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ec4899',
+    marginLeft: 8,
+  },
+  generateButton: {
+    backgroundColor: '#ec4899',
+    borderColor: '#ec4899',
+  },
+  generateButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginLeft: 8,
+  },
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  settingInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  settingText: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  settingArrow: {
+    marginLeft: 8,
+  },
+  settingArrowText: {
+    fontSize: 20,
+    color: '#9ca3af',
+  },
+  settingItemDanger: {
+    borderBottomColor: '#fecaca',
+  },
+  settingItemIcon: {
+    marginRight: 12,
+  },
+  settingItemContent: {
+    flex: 1,
+  },
+  settingItemTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  settingItemTitleDanger: {
+    color: '#ef4444',
+  },
+  settingItemDescription: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  settingItemValue: {
+    fontSize: 14,
+    color: '#9ca3af',
+    marginTop: 2,
+  },
+  settingItemRight: {
+    marginLeft: 12,
+  },
+  settingItemArrow: {
+    marginLeft: 8,
+  },
+  shareButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6b7280',
+    marginLeft: 8,
   },
 });

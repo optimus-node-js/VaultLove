@@ -45,6 +45,9 @@ export interface UserProfile {
   partnerCode?: string;
   createdAt?: any;
   updatedAt?: any;
+  connectedAt?: any;
+  disconnectedAt?: any;
+  codeGeneratedAt?: any;
 }
 
 export interface SignupData {
@@ -83,6 +86,7 @@ class AuthService {
   private confirmationResult: ConfirmationResult | null = null;
   private currentUserProfile: UserProfile | null = null;
   private verificationId: string = '';
+  private realtimeUnsubscribe: (() => void) | null = null;
 
   constructor() {
     // Don't await initialization in constructor - let it happen asynchronously
@@ -136,6 +140,9 @@ class AuthService {
             // Update current profile
             this.userProfile = userProfile;
             this.notifyProfileListeners(userProfile);
+            
+            // Set up real-time profile listener
+            this.setupRealTimeProfileListener(user.uid);
             
             // Notify all listeners about auth state change
             this.authStateListeners.forEach(callback => callback(user));
@@ -194,6 +201,76 @@ class AuthService {
     return () => {
       this.profileListeners = this.profileListeners.filter(cb => cb !== callback);
     };
+  }
+
+  onPartnerStatusChange(callback: (info: { status: string; partnerId?: string; partnerName?: string } | null) => void) {
+    console.log('📡 Setting up partner status change listener');
+    
+    // Since we don't have a separate partner status system, we'll use the profile changes
+    // and extract partner-related information
+    const profileCallback = (profile: UserProfile | null) => {
+      if (profile) {
+        const partnerInfo = {
+          status: profile.partnerStatus,
+          partnerId: profile.partnerId,
+          partnerName: profile.partnerId ? 'Partner' : undefined // We could enhance this to get actual partner name
+        };
+        callback(partnerInfo);
+      } else {
+        callback(null);
+      }
+    };
+
+    return this.onProfileChange(profileCallback);
+  }
+
+  private setupRealTimeProfileListener(uid: string) {
+    try {
+      // Clean up existing listener
+      if (this.realtimeUnsubscribe) {
+        this.realtimeUnsubscribe();
+      }
+
+      const userRef = doc(db, 'users', uid);
+      
+      // Listen for real-time updates to user profile
+      this.realtimeUnsubscribe = onSnapshot(userRef, (doc) => {
+        if (doc.exists()) {
+          const userData = doc.data();
+          const userProfile: UserProfile = {
+            uid: userData.uid || uid,
+            email: userData.email,
+            phoneNumber: userData.phoneNumber,
+            displayName: userData.displayName,
+            photoURL: userData.photoURL,
+            gender: userData.gender,
+            dateOfBirth: userData.dateOfBirth,
+            partnerId: userData.partnerId,
+            partnerStatus: userData.partnerStatus || 'no_partner',
+            partnerCode: userData.partnerCode,
+            createdAt: userData.createdAt,
+            updatedAt: userData.updatedAt,
+            connectedAt: userData.connectedAt,
+            disconnectedAt: userData.disconnectedAt,
+            codeGeneratedAt: userData.codeGeneratedAt
+          };
+          
+          console.log('🔄 Real-time profile update:', {
+            uid: userProfile.uid,
+            partnerStatus: userProfile.partnerStatus,
+            partnerId: userProfile.partnerId,
+            displayName: userProfile.displayName
+          });
+          
+          this.userProfile = userProfile;
+          this.notifyProfileListeners(userProfile);
+        }
+      });
+
+      console.log('🔄 Real-time profile listener setup complete');
+    } catch (error) {
+      console.error('❌ Failed to setup real-time profile listener:', error);
+    }
   }
 
   // Phone Authentication Methods
@@ -614,7 +691,7 @@ class AuthService {
 
   private async loadUserProfile(uid: string): Promise<UserProfile | null> {
     try {
-      console.log('Loading user profile for uid:', uid);
+      console.log('📄 Loading user profile for uid:', uid);
       const userRef = doc(db, 'users', uid);
       const userDoc = await getDoc(userRef);
       
@@ -632,25 +709,31 @@ class AuthService {
           partnerStatus: userData.partnerStatus || 'no_partner',
           partnerCode: userData.partnerCode,
           createdAt: userData.createdAt,
-          updatedAt: userData.updatedAt
+          updatedAt: userData.updatedAt,
+          connectedAt: userData.connectedAt,
+          disconnectedAt: userData.disconnectedAt,
+          codeGeneratedAt: userData.codeGeneratedAt
         };
         
-        console.log('User profile loaded successfully:', {
+        console.log('✅ User profile loaded successfully:', {
           uid: userProfile.uid,
           email: userProfile.email,
           displayName: userProfile.displayName,
-          partnerStatus: userProfile.partnerStatus
+          partnerStatus: userProfile.partnerStatus,
+          partnerId: userProfile.partnerId
         });
         
         this.userProfile = userProfile;
+        console.log('📡 Notifying profile listeners...');
         this.notifyProfileListeners(userProfile);
+        console.log('📡 Profile listeners notified');
         return userProfile;
       }
       
-      console.log('No user profile found in Firestore for uid:', uid);
+      console.log('❌ No user profile found in Firestore for uid:', uid);
       return null;
     } catch (error) {
-      console.error('Load profile error:', error);
+      console.error('❌ Load profile error:', error);
       return null;
     }
   }
@@ -661,14 +744,96 @@ class AuthService {
         throw new Error('User must be authenticated');
       }
 
-      // Implementation for partner connection logic
-      // This would search for users with the given partner code
-      console.log('Connecting with partner code:', partnerCode);
+      console.log('🔍 Searching for partner with code:', partnerCode);
+      console.log('🔍 Current user:', this.currentUser.uid);
+      console.log('🔍 Current user profile:', this.userProfile);
+
+      // Search for a user with this partner code
+      const usersRef = collection(db, 'users');
+      const partnerQuery = query(
+        usersRef,
+        where('partnerCode', '==', partnerCode),
+        where('partnerStatus', '==', 'pending')
+      );
+
+      console.log('🔍 Executing partner query...');
+      const partnerSnapshot = await getDocs(partnerQuery);
+      console.log('🔍 Partner query results:', partnerSnapshot.size, 'documents found');
+
+      if (partnerSnapshot.empty) {
+        console.log('❌ No partner found with code:', partnerCode);
+        throw new Error('Invalid partner code or partner not found');
+      }
+
+      const partnerDoc = partnerSnapshot.docs[0];
+      const partnerData = partnerDoc.data();
+      const partnerId = partnerDoc.id;
+
+      console.log('✅ Partner found:', {
+        id: partnerId,
+        displayName: partnerData.displayName,
+        partnerStatus: partnerData.partnerStatus,
+        partnerCode: partnerData.partnerCode
+      });
+
+      if (partnerId === this.currentUser.uid) {
+        throw new Error('You cannot connect to yourself');
+      }
+
+      console.log('🔄 Updating both users to connected status...');
+
+      // Update both users to connected status
+      const batch = [];
       
-      // For now, just update the partner code
-      await this.updateProfile({ partnerCode });
+      // Update current user
+      const currentUserUpdate = {
+        partnerId: partnerId,
+        partnerStatus: 'connected',
+        partnerCode: null, // Clear the code
+        connectedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      
+      // Update partner
+      const partnerUpdate = {
+        partnerId: this.currentUser.uid,
+        partnerStatus: 'connected',
+        partnerCode: null, // Clear the code
+        connectedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      console.log('🔄 Current user update:', currentUserUpdate);
+      console.log('🔄 Partner update:', partnerUpdate);
+
+      batch.push(updateDoc(doc(db, 'users', this.currentUser.uid), currentUserUpdate));
+      batch.push(updateDoc(doc(db, 'users', partnerId), partnerUpdate));
+
+      // Execute all updates
+      console.log('🔄 Executing batch updates...');
+      await Promise.all(batch);
+      console.log('✅ Batch updates completed');
+
+      // Update local profile
+      console.log('🔄 Reloading user profile...');
+      await this.loadUserProfile(this.currentUser.uid);
+      console.log('✅ User profile reloaded:', this.userProfile);
+
+      // Force immediate profile listener notification
+      console.log('🔄 Force notifying profile listeners...');
+      this.notifyProfileListeners(this.userProfile);
+
+      console.log('💑 Successfully connected with partner!');
+      
+      // Log analytics
+      if (analytics) {
+        logEvent(analytics, 'partner_connected', {
+          user_id: this.currentUser.uid,
+          partner_id: partnerId
+        });
+      }
     } catch (error) {
-      console.error('Partner connection error:', error);
+      console.error('❌ Partner connection failed:', error);
       throw error;
     }
   }
@@ -679,20 +844,35 @@ class AuthService {
         throw new Error('User must be authenticated');
       }
 
-      // Generate a unique partner code
+      // Generate a unique 6-character partner code
       const partnerCode = Math.random().toString(36).substring(2, 8).toUpperCase();
       
-      console.log('Generated partner code:', partnerCode);
+      console.log('🔗 Generated partner code:', partnerCode);
       
+      // Check if code already exists (very unlikely but possible)
+      const existingCodeQuery = query(
+        collection(db, 'users'),
+        where('partnerCode', '==', partnerCode)
+      );
+      const existingSnapshot = await getDocs(existingCodeQuery);
+      
+      if (!existingSnapshot.empty) {
+        // Recursively generate a new code if this one exists
+        return this.generatePartnerConnection();
+      }
+
       // Update user profile with the partner code and pending status
       await this.updateProfile({ 
         partnerCode,
-        partnerStatus: 'pending'
+        partnerStatus: 'pending',
+        codeGeneratedAt: serverTimestamp()
       });
+
+      console.log('✅ Partner connection code ready for sharing');
 
       return partnerCode;
     } catch (error) {
-      console.error('Generate partner connection error:', error);
+      console.error('❌ Generate partner connection failed:', error);
       throw error;
     }
   }
@@ -703,18 +883,51 @@ class AuthService {
         throw new Error('User must be authenticated');
       }
 
-      console.log('Disconnecting from partner...');
-      
-      // Update user profile to remove partner connection
-      await this.updateProfile({ 
-        partnerCode: undefined,
-        partnerId: undefined,
-        partnerStatus: 'no_partner'
-      });
+      const partnerId = this.userProfile.partnerId;
+      if (!partnerId) {
+        throw new Error('No partner connected');
+      }
 
-      console.log('Successfully disconnected from partner');
+      console.log('💔 Disconnecting from partner...');
+      
+      // Update both users to remove connection
+      const batch = [];
+      
+        // Update current user
+      batch.push(updateDoc(doc(db, 'users', this.currentUser.uid), {
+        partnerId: null,
+          partnerStatus: 'no_partner',
+        partnerCode: null,
+        disconnectedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+      }));
+
+        // Update partner
+      batch.push(updateDoc(doc(db, 'users', partnerId), {
+        partnerId: null,
+          partnerStatus: 'no_partner',
+        partnerCode: null,
+        disconnectedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+      }));
+
+      // Execute all updates
+      await Promise.all(batch);
+
+      // Update local profile
+      await this.loadUserProfile(this.currentUser.uid);
+
+      console.log('✅ Successfully disconnected from partner');
+      
+      // Log analytics
+      if (analytics) {
+        logEvent(analytics, 'partner_disconnected', {
+          user_id: this.currentUser.uid,
+          partner_id: partnerId
+        });
+      }
     } catch (error) {
-      console.error('Disconnect partner error:', error);
+      console.error('❌ Partner disconnection failed:', error);
       throw error;
     }
   }
@@ -795,6 +1008,12 @@ class AuthService {
     this.profileListeners = [];
     this.confirmationResult = null;
     this.recaptchaVerifier = null;
+    
+    // Clean up real-time listener
+    if (this.realtimeUnsubscribe) {
+      this.realtimeUnsubscribe();
+      this.realtimeUnsubscribe = null;
+    }
   }
 
   async createUserProfile(userData: Partial<UserProfile>): Promise<UserProfile> {
@@ -1050,6 +1269,75 @@ class AuthService {
     }
     
     return this.sendPhoneVerification(phoneNumber, recaptchaVerifier);
+  }
+
+  // Add a test method to debug partner connection
+  async testPartnerConnection(partnerCode: string): Promise<void> {
+    try {
+      console.log('🧪 Testing partner connection with code:', partnerCode);
+      
+      if (!this.currentUser || !this.userProfile) {
+        console.log('❌ Test failed: User not authenticated');
+        return;
+      }
+
+      // Test 1: Check if we can query for the partner
+      const usersRef = collection(db, 'users');
+      const partnerQuery = query(
+        usersRef,
+        where('partnerCode', '==', partnerCode)
+      );
+
+      console.log('🧪 Test 1: Querying for partner code...');
+      const partnerSnapshot = await getDocs(partnerQuery);
+      console.log('🧪 Test 1 Result:', partnerSnapshot.size, 'documents found');
+
+      if (partnerSnapshot.empty) {
+        console.log('❌ Test 1 Failed: No partner found');
+        return;
+      }
+
+      partnerSnapshot.docs.forEach((doc, index) => {
+        const data = doc.data();
+        console.log(`🧪 Partner ${index + 1}:`, {
+          id: doc.id,
+          partnerCode: data.partnerCode,
+          partnerStatus: data.partnerStatus,
+          displayName: data.displayName
+        });
+      });
+
+      // Test 2: Check if we can read partner documents
+      const partnerDoc = partnerSnapshot.docs[0];
+      const partnerId = partnerDoc.id;
+      
+      console.log('🧪 Test 2: Reading partner document directly...');
+      const partnerDirectRef = doc(db, 'users', partnerId);
+      const partnerDirectDoc = await getDoc(partnerDirectRef);
+      
+      if (partnerDirectDoc.exists()) {
+        console.log('🧪 Test 2 Success: Partner document readable');
+        console.log('🧪 Partner data:', partnerDirectDoc.data());
+      } else {
+        console.log('❌ Test 2 Failed: Cannot read partner document');
+      }
+
+      // Test 3: Check if we can read our own document
+      console.log('🧪 Test 3: Reading our own document...');
+      const ownRef = doc(db, 'users', this.currentUser.uid);
+      const ownDoc = await getDoc(ownRef);
+      
+      if (ownDoc.exists()) {
+        console.log('🧪 Test 3 Success: Own document readable');
+        console.log('🧪 Own data:', ownDoc.data());
+      } else {
+        console.log('❌ Test 3 Failed: Cannot read own document');
+      }
+
+      console.log('🧪 All tests completed');
+    } catch (error) {
+      console.error('🧪 Test error:', error);
+    }
   }
 }
 

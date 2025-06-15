@@ -40,6 +40,7 @@ import {
   Upload as UploadIcon,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
+import ZoomableImage from '../components/ZoomableImage';
 
 // Platform-specific ActionSheet import
 let ActionSheetIOS: any = null;
@@ -896,8 +897,33 @@ export default function VaultScreen() {
       setAlbumContextBeforeFullScreen(null);
       setShowFullScreen(true);
     }
+  };
+
+  // Navigation functions for swipe gestures
+  const navigateToNextMedia = () => {
+    if (!selectedMedia) return;
     
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const currentMediaArray = openedFromAlbum ? albumMedia : filteredMedia;
+    const currentIndex = currentMediaArray.findIndex(item => item.id === selectedMedia.id);
+    
+    if (currentIndex < currentMediaArray.length - 1) {
+      const nextMedia = currentMediaArray[currentIndex + 1];
+      setSelectedMedia(nextMedia);
+      setCaptionText(nextMedia.caption || '');
+    }
+  };
+
+  const navigateToPreviousMedia = () => {
+    if (!selectedMedia) return;
+    
+    const currentMediaArray = openedFromAlbum ? albumMedia : filteredMedia;
+    const currentIndex = currentMediaArray.findIndex(item => item.id === selectedMedia.id);
+    
+    if (currentIndex > 0) {
+      const prevMedia = currentMediaArray[currentIndex - 1];
+      setSelectedMedia(prevMedia);
+      setCaptionText(prevMedia.caption || '');
+    }
   };
 
   const closeFullScreen = () => {
@@ -916,9 +942,11 @@ export default function VaultScreen() {
       // The album modal is already open, just refresh the data
       setTimeout(async () => {
         try {
-          const refreshedMedia = await storageService.getAlbumMedia(albumContextBeforeFullScreen.id);
-          setAlbumMedia(refreshedMedia);
-          console.log('🎯 Album media refreshed - staying in album');
+          if (albumContextBeforeFullScreen) {
+            const refreshedMedia = await storageService.getAlbumMedia(albumContextBeforeFullScreen.id);
+            setAlbumMedia(refreshedMedia);
+            console.log('🎯 Album media refreshed - staying in album');
+          }
         } catch (error) {
           console.error('Failed to refresh album media:', error);
         }
@@ -954,7 +982,6 @@ export default function VaultScreen() {
       setSelectedMedia(prev => prev ? { ...prev, caption: captionText.trim() } : prev);
       
       setEditingCaption(false);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert('Success', 'Caption updated successfully!');
     } catch (error) {
       console.error('Update caption error:', error);
@@ -1143,9 +1170,19 @@ export default function VaultScreen() {
       <View style={styles.headerTop}>
         <View style={styles.headerLeft}>
           <Text style={styles.headerTitle}>Memories</Text>
-          <Text style={styles.headerSubtitle}>
-            {filteredMedia.length} {filteredMedia.length === 1 ? 'memory' : 'memories'}
-          </Text>
+          <View style={styles.headerSubtitleContainer}>
+            <Text style={styles.headerSubtitle}>
+              {filteredMedia.length} {filteredMedia.length === 1 ? 'memory' : 'memories'}
+            </Text>
+            {userProfile?.partnerStatus === 'connected' && (
+              <View style={styles.partnerIndicator}>
+                <Heart color="#ec4899" size={12} fill="#ec4899" />
+                <Text style={styles.partnerIndicatorText}>
+                  Shared with {userProfile.partnerName || 'Partner'}
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
         <View style={styles.headerActions}>
           <TouchableOpacity 
@@ -1324,10 +1361,13 @@ export default function VaultScreen() {
               {/* Media Content */}
               <View style={styles.fullScreenMediaContainer}>
                 {selectedMedia && (
-                  <Image
+                  <ZoomableImage
                     source={{ uri: selectedMedia.downloadURL }}
                     style={styles.fullScreenImage}
-                    resizeMode="contain"
+                    onSingleTap={closeFullScreen}
+                    onSwipeLeft={navigateToNextMedia}
+                    onSwipeRight={navigateToPreviousMedia}
+                    onSwipeDown={closeFullScreen}
                   />
                 )}
               </View>
@@ -1839,10 +1879,13 @@ export default function VaultScreen() {
                       {/* Media Content */}
                       <View style={styles.fullScreenMediaContainer}>
                         {selectedMedia && (
-                          <Image
+                          <ZoomableImage
                             source={{ uri: selectedMedia.downloadURL }}
                             style={styles.fullScreenImage}
-                            resizeMode="contain"
+                            onSingleTap={closeFullScreen}
+                            onSwipeLeft={navigateToNextMedia}
+                            onSwipeRight={navigateToPreviousMedia}
+                            onSwipeDown={closeFullScreen}
                           />
                         )}
                       </View>
@@ -3158,5 +3201,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
+  },
+  headerSubtitleContainer: {
+    gap: 4,
+  },
+  partnerIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  partnerIndicatorText: {
+    fontSize: 12,
+    color: '#ec4899',
+    fontWeight: '500',
   },
 });

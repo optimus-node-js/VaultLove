@@ -19,6 +19,7 @@ import {
   orderBy, 
   onSnapshot, 
   getDocs,
+  getDoc,
   serverTimestamp,
   Timestamp 
 } from 'firebase/firestore';
@@ -37,13 +38,18 @@ export interface MediaFile {
   thumbnailURL?: string;
   storagePath: string;
   uploadedBy: string;
+  uploadedByName?: string; // Partner's name for easy display
   uploadedAt: Timestamp;
   caption?: string;
   tags?: string[];
   isFavorite: boolean;
+  favoriteBy?: string[]; // Array of user IDs who favorited this
   isShared: boolean;
+  sharedCollectionId?: string; // Link to shared collection if shared
   metadata?: Record<string, any>;
   albumId?: string; // Link to album if part of one
+  lastModifiedBy?: string; // Track who last modified (for captions, favorites, etc.)
+  lastModifiedAt?: Timestamp;
 }
 
 export interface Album {
@@ -52,11 +58,15 @@ export interface Album {
   description?: string;
   coverImageUrl: string;
   createdBy: string;
+  createdByName?: string; // Partner's name for easy display
   createdAt: Timestamp;
   updatedAt: Timestamp;
   mediaCount: number;
   isShared: boolean;
+  sharedCollectionId?: string; // Link to shared collection if shared
   mediaIds: string[]; // Array of media file IDs in this album
+  lastModifiedBy?: string; // Track who last modified
+  lastModifiedAt?: Timestamp;
 }
 
 export interface BulkUploadProgress {
@@ -186,6 +196,9 @@ class StorageService {
               const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
               console.log('🔗 Download URL obtained:', downloadURL);
 
+              // Get user profile for partner information
+              const userProfile = authService.getUserProfile();
+              
               // Create media record in Firestore - exclude undefined fields
               const mediaData: Omit<MediaFile, 'id'> = {
                 fileName: uniqueFileName,
@@ -196,10 +209,13 @@ class StorageService {
                 downloadURL,
                 storagePath,
                 uploadedBy: currentUser.uid,
+                uploadedByName: userProfile?.displayName || 'User',
                 uploadedAt: serverTimestamp() as Timestamp,
                 ...(caption && { caption }), // Only include caption if it has a value
+                favoriteBy: [], // Initialize empty favorites array
                 isFavorite: false,
-                isShared: false,
+                isShared: userProfile?.partnerStatus === 'connected',
+                ...(userProfile?.sharedCollectionId && { sharedCollectionId: userProfile.sharedCollectionId }),
                 metadata: {
                   userAgent: 'VaultLove Mobile App',
                   platform: 'React Native'
@@ -419,26 +435,41 @@ class StorageService {
         throw new Error('User must be authenticated');
       }
 
-      const mediaRef = doc(db, 'media', mediaId);
-      const mediaDoc = await getDocs(query(
-        collection(db, 'media'),
-        where('__name__', '==', mediaId),
-        where('uploadedBy', '==', currentUser.uid)
-      ));
+      console.log('🔄 Toggling favorite for media:', mediaId, 'by user:', currentUser.uid);
 
-      if (mediaDoc.empty) {
-        throw new Error('Media not found');
+      const mediaRef = doc(db, 'media', mediaId);
+      const mediaDoc = await getDoc(mediaRef);
+      
+      if (!mediaDoc.exists()) {
+        throw new Error('Media file not found');
       }
 
-      const currentData = mediaDoc.docs[0].data() as MediaFile;
+      const mediaData = mediaDoc.data() as MediaFile;
+      const currentFavoriteBy = mediaData.favoriteBy || [];
+      const isCurrentlyFavorited = currentFavoriteBy.includes(currentUser.uid);
+      
+      // Update favoriteBy array - add or remove current user
+      let newFavoriteBy: string[];
+      if (isCurrentlyFavorited) {
+        // Remove current user from favorites
+        newFavoriteBy = currentFavoriteBy.filter(uid => uid !== currentUser.uid);
+        console.log('❌ Removing user from favorites');
+      } else {
+        // Add current user to favorites
+        newFavoriteBy = [...currentFavoriteBy, currentUser.uid];
+        console.log('❤️ Adding user to favorites');
+      }
+      
       await updateDoc(mediaRef, {
-        isFavorite: !currentData.isFavorite,
+        favoriteBy: newFavoriteBy,
+        lastModifiedBy: currentUser.uid,
+        lastModifiedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
 
-      console.log('Favorite status toggled for media:', mediaId);
+      console.log('✅ Favorite status updated. New favoriteBy:', newFavoriteBy);
     } catch (error) {
-      console.error('Toggle favorite error:', error);
+      console.error('❌ Toggle favorite error:', error);
       throw error;
     }
   }
@@ -478,6 +509,8 @@ class StorageService {
   // Media Subscription
   subscribeToUserMedia(callback: (media: MediaFile[]) => void): () => void {
     const currentUser = authService.getCurrentUser();
+    const userProfile = authService.getUserProfile();
+    
     if (!currentUser) {
       console.warn('No authenticated user for media subscription');
       callback([]);
@@ -485,36 +518,92 @@ class StorageService {
     }
 
     console.log('Setting up media subscription for user:', currentUser.uid);
+    console.log('Partner status:', userProfile?.partnerStatus);
+    console.log('Shared collection ID:', userProfile?.sharedCollectionId);
 
-    const q = query(
-      collection(db, 'media'),
-      where('uploadedBy', '==', currentUser.uid),
-      orderBy('uploadedAt', 'desc')
-    );
+    // If user has a partner and shared collection, subscribe to shared media
+    if (userProfile?.partnerStatus === 'connected' && userProfile?.sharedCollectionId) {
+      console.log('📡 Setting up SHARED media subscription');
+      
+      const sharedQuery = query(
+        collection(db, 'media'),
+        where('sharedCollectionId', '==', userProfile.sharedCollectionId),
+        orderBy('uploadedAt', 'desc')
+      );
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        try {
-          const media: MediaFile[] = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          } as MediaFile));
+      const unsubscribe = onSnapshot(
+        sharedQuery,
+        (snapshot) => {
+          try {
+            const media: MediaFile[] = snapshot.docs.map(doc => {
+              const data = doc.data() as MediaFile;
+              
+              // Enhance with partner info for display
+              return {
+                ...data,
+                id: doc.id,
+                // Set favorite status based on current user
+                isFavorite: data.favoriteBy?.includes(currentUser.uid) || false
+              } as MediaFile;
+            });
 
-          console.log('Media subscription update:', media.length, 'files');
-          callback(media);
-        } catch (error) {
-          console.error('Media subscription error:', error);
+            console.log('📡 Shared media subscription update:', media.length, 'files');
+            console.log('📊 Media breakdown:', {
+              total: media.length,
+              byCurrentUser: media.filter(m => m.uploadedBy === currentUser.uid).length,
+              byPartner: media.filter(m => m.uploadedBy !== currentUser.uid).length,
+              favorites: media.filter(m => m.isFavorite).length
+            });
+            
+            callback(media);
+          } catch (error) {
+            console.error('❌ Shared media subscription error:', error);
+            callback([]);
+          }
+        },
+        (error) => {
+          console.error('❌ Shared media subscription listener error:', error);
           callback([]);
         }
-      },
-      (error) => {
-        console.error('Media subscription listener error:', error);
-        callback([]);
-      }
-    );
+      );
 
-    return unsubscribe;
+      return unsubscribe;
+    } else {
+      // User is not partnered, use individual media subscription
+      console.log('📡 Setting up INDIVIDUAL media subscription');
+      
+      const individualQuery = query(
+        collection(db, 'media'),
+        where('uploadedBy', '==', currentUser.uid),
+        where('sharedCollectionId', '==', null), // Only individual media
+        orderBy('uploadedAt', 'desc')
+      );
+
+      const unsubscribe = onSnapshot(
+        individualQuery,
+        (snapshot) => {
+          try {
+            const media: MediaFile[] = snapshot.docs.map(doc => ({
+              ...doc.data(),
+              id: doc.id,
+              isFavorite: doc.data().isFavorite || false
+            } as MediaFile));
+
+            console.log('📡 Individual media subscription update:', media.length, 'files');
+            callback(media);
+          } catch (error) {
+            console.error('❌ Individual media subscription error:', error);
+            callback([]);
+          }
+        },
+        (error) => {
+          console.error('❌ Individual media subscription listener error:', error);
+          callback([]);
+        }
+      );
+
+      return unsubscribe;
+    }
   }
 
   // Utility Methods
