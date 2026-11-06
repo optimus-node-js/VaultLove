@@ -49,7 +49,7 @@ VaultLove is a beautifully designed React Native application that provides coupl
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/vaultlove.git
+   git clone https://github.com/optimus-node-js/VaultLove.git
    cd vaultlove
    ```
 
@@ -193,9 +193,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 Having issues? We're here to help!
 
 - 📧 **Email**: support@vaultlove.app
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/yourusername/vaultlove/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/vaultlove/discussions)
-- 📖 **Documentation**: [Wiki](https://github.com/yourusername/vaultlove/wiki)
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/optimus-node-js/VaultLove/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/optimus-node-js/VaultLove/discussions)
+- 📖 **Documentation**: [Wiki](https://github.com/optimus-node-js/VaultLove/wiki)
 
 ## 🌟 Show Your Love
 
@@ -215,3 +215,16 @@ If VaultLove helped secure your precious memories, please:
 [⬆ Back to Top](#-vaultlove)
 
 </div>
+
+---
+
+## 👤 Author
+
+**Rahul Vishwakarma** — Senior Full Stack Developer · Ahmedabad, India
+
+[![Portfolio](https://img.shields.io/badge/Portfolio-rahul--vishwakarma--portfolio.vercel.app-0A66C2?style=flat-square&logo=vercel&logoColor=white)](https://rahul-vishwakarma-portfolio.vercel.app/)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Rahul%20Vishwakarma-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://linkedin.com/in/rahul-vishwakarma-101346192)
+[![Email](https://img.shields.io/badge/Email-karmarahul67%40gmail.com-D14836?style=flat-square&logo=gmail&logoColor=white)](mailto:karmarahul67@gmail.com)
+[![GitHub](https://img.shields.io/badge/GitHub-optimus--node--js-181717?style=flat-square&logo=github)](https://github.com/optimus-node-js)
+
+If you find this project useful, consider giving it a ⭐.
