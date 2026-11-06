@@ -1,4 +1,4 @@
-# 💖 VaultLove
+# VaultLove
 
 > **A Secure Digital Vault for Couples' Precious Memories**
 
@@ -9,33 +9,33 @@ VaultLove is a beautifully designed React Native application that provides coupl
 ![Expo](https://img.shields.io/badge/Expo-53.0.0-black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8.3-blue)
 
-## ✨ Features
+## Features
 
-### 🔐 **Security First**
+### **Security First**
 - **PIN Protection**: 6-digit PIN authentication
 - **Biometric Authentication**: Fingerprint and Face ID support
 - **End-to-End Encryption**: All files are encrypted before storage
 - **Panic Mode**: Quick security features for privacy protection
 
-### 📸 **Memory Management**
+### **Memory Management**
 - **Photo & Video Upload**: Capture or select from gallery
 - **Smart Organization**: Automatic categorization and tagging
 - **Favorites System**: Mark special moments with hearts
 - **Memory Notes**: Add captions and descriptions to your media
 
-### 💕 **Couple-Centric Design**
+### **Couple-Centric Design**
 - **Shared Vault**: Collaborate with your partner
 - **Beautiful UI**: Romantic dark theme with love-inspired design
 - **Haptic Feedback**: Tactile interactions for better experience
 - **Cross-Platform**: Works on iOS, Android, and Web
 
-### 🎨 **Modern User Experience**
+### **Modern User Experience**
 - **Smooth Animations**: Fluid transitions and interactions
 - **Responsive Design**: Adapts to all screen sizes
 - **Accessibility**: Built with inclusive design principles
 - **Offline Support**: Access your memories anytime
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -75,7 +75,7 @@ VaultLove is a beautifully designed React Native application that provides coupl
    - **Android**: Press `a` to open in Android Emulator
    - **Web**: Press `w` to open in browser
 
-## 📱 Demo Credentials
+## Demo Credentials
 
 For testing purposes, use these credentials:
 
@@ -83,7 +83,7 @@ For testing purposes, use these credentials:
 - **Demo User**: Alex
 - **Demo Partner**: Jordan
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 VaultLove/
@@ -101,7 +101,7 @@ VaultLove/
 └── README.md             # You are here!
 ```
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 ### **Frontend**
 - **React Native** 0.79.1 - Cross-platform mobile framework
@@ -127,7 +127,7 @@ VaultLove/
 - **Expo Camera** - Real-time camera functionality
 - **React Native SVG** - Scalable vector graphics
 
-## 🔧 Configuration Files
+## Configuration Files
 
 The project includes several configuration files that have been carefully optimized:
 
@@ -137,7 +137,7 @@ The project includes several configuration files that have been carefully optimi
 - **`app.config.js`** - Expo app configuration
 - **`tsconfig.json`** - TypeScript configuration
 
-## 🎨 Design Philosophy
+## Design Philosophy
 
 VaultLove follows a **dark romantic aesthetic** with:
 
@@ -147,7 +147,7 @@ VaultLove follows a **dark romantic aesthetic** with:
 - **Interactions**: Subtle haptic feedback and smooth animations
 - **Icons**: Lucide icons for consistency and clarity
 
-## 🚀 Features in Development
+## Features in Development
 
 - [ ] Cloud synchronization
 - [ ] Advanced sharing options
@@ -158,7 +158,7 @@ VaultLove follows a **dark romantic aesthetic** with:
 - [ ] Backup and restore
 - [ ] Multi-language support
 
-## 🤝 Contributing
+## Contributing
 
 We love contributions! Here's how you can help:
 
@@ -176,11 +176,11 @@ We love contributions! Here's how you can help:
 - Update documentation for new features
 - Use conventional commit messages
 
-## 📝 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 💝 Acknowledgments
+## Acknowledgments
 
 - **Expo Team** - For the amazing development platform
 - **React Native Community** - For the robust ecosystem
@@ -188,43 +188,42 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Google Fonts** - For the Inter font family
 - **All couples** - Who inspired this project
 
-## 📞 Support
+## Support
 
 Having issues? We're here to help!
 
-- 📧 **Email**: support@vaultlove.app
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/optimus-node-js/VaultLove/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/optimus-node-js/VaultLove/discussions)
-- 📖 **Documentation**: [Wiki](https://github.com/optimus-node-js/VaultLove/wiki)
+- **Email**: support@vaultlove.app
+- **Bug Reports**: [GitHub Issues](https://github.com/optimus-node-js/VaultLove/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/optimus-node-js/VaultLove/discussions)
+- **Documentation**: [Wiki](https://github.com/optimus-node-js/VaultLove/wiki)
 
-## 🌟 Show Your Love
+## Show Your Love
 
 If VaultLove helped secure your precious memories, please:
 
-- ⭐ **Star this repository**
-- 🍴 **Fork and contribute**
-- 📢 **Share with other couples**
-- 💖 **Leave a review**
+- **Star this repository**
+- **Fork and contribute**
+- **Share with other couples**
+- **Leave a review**
 
 ---
 
 <div align="center">
 
-**Made with 💖 for couples who cherish their memories**
+**Made with for couples who cherish their memories**
 
-[⬆ Back to Top](#-vaultlove)
+[Back to Top](#-vaultlove)
 
 </div>
 
 ---
 
-## 👤 Author
+## Author
 
-**Rahul Vishwakarma** — Senior Full Stack Developer · Ahmedabad, India
+**Rahul Vishwakarma**, Senior Full Stack Developer based in Ahmedabad, India
 
 [![Portfolio](https://img.shields.io/badge/Portfolio-rahul--vishwakarma--portfolio.vercel.app-0A66C2?style=flat-square&logo=vercel&logoColor=white)](https://rahul-vishwakarma-portfolio.vercel.app/)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Rahul%20Vishwakarma-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://linkedin.com/in/rahul-vishwakarma-101346192)
 [![Email](https://img.shields.io/badge/Email-karmarahul67%40gmail.com-D14836?style=flat-square&logo=gmail&logoColor=white)](mailto:karmarahul67@gmail.com)
 [![GitHub](https://img.shields.io/badge/GitHub-optimus--node--js-181717?style=flat-square&logo=github)](https://github.com/optimus-node-js)
 
-If you find this project useful, consider giving it a ⭐.
